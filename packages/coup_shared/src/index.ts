@@ -1,0 +1,1 @@
+export const COUP_TEST_STR: string = "from coup_shared";

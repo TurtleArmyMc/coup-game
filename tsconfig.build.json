@@ -1,0 +1,11 @@
+{
+    "files": [],
+    "references": [
+      {
+        "path": "packages/coup_server"
+      },
+      {
+        "path": "packages/coup_shared"
+      },
+    ]
+  }
