@@ -3,5 +3,5 @@
   "compilerOptions": {
     "outDir": "dist"
   },
-  "references": [{ "path": "../coup_shared" }]
+  "references": [{ "path": "../coup_shared" }, { "path": "../coup_game" }]
 }

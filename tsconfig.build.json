@@ -5,6 +5,9 @@
         "path": "packages/coup_server"
       },
       {
+        "path": "packages/coup_game"
+      },
+      {
         "path": "packages/coup_shared"
       },
     ]

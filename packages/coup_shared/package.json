@@ -1,10 +1,6 @@
 {
   "name": "coup_shared",
   "version": "1.0.0",
-  "description": "",
   "main": "lib/index.js",
-  "types": "lib/index.d.ts",
-  "scripts": {},
-  "author": "",
-  "license": "ISC"
+  "types": "lib/index.d.ts"
 }

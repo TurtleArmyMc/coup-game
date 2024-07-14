@@ -1,0 +1,9 @@
+{
+    "name": "coup_game",
+    "version": "1.0.0",
+    "main": "lib/index.js",
+    "types": "lib/index.d.ts",
+    "dependencies": {
+        "coup_shared": "^1.0.0"
+    }
+}

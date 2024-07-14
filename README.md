@@ -1,0 +1,1 @@
+`npx tsc --build -w tsconfig.build.json`
