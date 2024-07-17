@@ -10,5 +10,8 @@
       {
         "path": "packages/coup_shared"
       },
+      {
+        "path": "packages/coup_client_react"
+      },
     ]
   }

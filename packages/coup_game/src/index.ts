@@ -1,4 +1,4 @@
-import { Action, INFLUENCE_LIST, Influence, PlayerId, isTurnAction, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, isCounterAction, ClientGameState, AwaitingTurnAction, AwaitingInfluenceExchange, AwaitingForeignAidBlock, AwaitingTargetCounteraction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState } from "coup_shared";
+import { Action, INFLUENCE_LIST, Influence, PlayerId, isTurnAction, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, isCounterAction, ClientGameState, AwaitingTurnAction, AwaitingInfluenceExchange, AwaitingForeignAidBlock, AwaitingTargetCounteraction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState, ActionType } from "coup_shared";
 import { isDeepStrictEqual } from "util";
 import assert from 'node:assert/strict';
 
@@ -79,9 +79,10 @@ export class CoupGame {
 
     getHandsState(stateFor: PlayerId): HandsState {
         return {
-            influences_discarded: this.playerInfluences.map(([i1, i2]) => [i1.discarded, i2.discarded]),
+            influences_discarded: this.playerInfluences.map(([i1, i2]) => [i1.discarded ? i1.influence : null, i2.discarded ? i2.influence : null]),
             player_credits: this.playerCredits,
-            player_influences: this.playerInfluences[stateFor].map(i => i.influence) as [Influence, Influence],
+            this_player_id: stateFor,
+            this_player_influences: this.playerInfluences[stateFor].map(i => i.influence) as [Influence, Influence],
         };
     }
 
@@ -128,6 +129,7 @@ export class CoupGame {
     // someone with one influence who challenged the assassination, and no longer
     // has any influences once the assassination is attempted to be executed.
     private actionIsValid(action: Action): boolean {
+        // TODO: Add bounds checks to indices?
         if (this.gameState.state === "game_over") {
             return false;
         }
@@ -145,93 +147,101 @@ export class CoupGame {
                 && !this.playerEliminated(action.target_player);
         }
         if (isTurnAction(action.action_type)) {
-            if (this.gameState.state !== "player_turn" || action.acting_player !== this.gameState.player) {
+            if (this.gameState.state !== "player_turn") {
                 return false;
             }
-            switch (action.action_type) {
-                case "Income":
-                case "Foreign Aid":
-                case "Tax":
-                case "Exchange":
-                    return true;
-                case "Coup":
-                    return action.acting_player !== action.target_player
-                        && !this.playerEliminated(action.target_player)
-                        && this.playerCredits[action.acting_player] >= 7;
-                case "Assassinate":
-                    return action.acting_player !== action.target_player
-                        && !this.playerEliminated(action.target_player)
-                        && this.playerCredits[action.acting_player] >= 3;
-                case "Steal":
-                    return action.acting_player !== action.target_player
-                        && !this.playerEliminated(action.target_player)
-                        && this.playerCredits[action.target_player] > 0;
+            if (action.acting_player !== this.gameState.player) {
+                return false;
             }
-        } else {
-            switch (action.action_type) {
-                case "Choose Exchanged Influences":
-                    return this.gameState.state === "awaiting_influence_exchange"
-                        && action.acting_player === this.gameState.exchanging_player
-                        && (
-                            (action.swap_influence_with[0] ?? action.swap_influence_with[1] === null)
-                            || action.swap_influence_with[0] !== action.swap_influence_with[1]
-                        )
-                        && (
-                            action.swap_influence_with[0] === null
-                            || !this.playerInfluences[action.acting_player][action.swap_influence_with[0]].discarded
-                        )
-                        && (
-                            action.swap_influence_with[1] === null
-                            || !this.playerInfluences[action.acting_player][action.swap_influence_with[1]].discarded
-                        );
-                case "Block Foreign Aid":
-                    return this.gameState.state === "awaiting_foreign_aid_block"
-                        && action.acting_player === this.gameState.foreign_aid_action.acting_player
-                        && !this.gameState.passed_players.includes(action.acting_player)
-                        && isDeepStrictEqual(action.blocked_action, this.gameState.foreign_aid_action);
-                case "Block Stealing with Captain": {
-                    return this.gameState.state === "awaiting_action_target_counteraction"
-                        && this.gameState.targeted_action.action_type === "Steal"
-                        && action.acting_player === this.gameState.targeted_action.target_player
-                        && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
-                }
-                case "Block Stealing with Ambassador": {
-                    return this.gameState.state === "awaiting_action_target_counteraction"
-                        && this.gameState.targeted_action.action_type === "Steal"
-                        && action.acting_player === this.gameState.targeted_action.target_player
-                        && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
-                }
-                case "Block Assassination": {
-                    return this.gameState.state === "awaiting_action_target_counteraction"
-                        && this.gameState.targeted_action.action_type === "Assassinate"
-                        && action.acting_player === this.gameState.targeted_action.target_player
-                        && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
-                }
-                case "Challenge":
-                    return this.gameState.state === "awaiting_challenge"
-                        && isDeepStrictEqual(action.challenged_action, this.gameState.challengable_action);
-                case "Reveal Challenge Result":
-                    return this.gameState.state === "awaiting_challenge_reveal"
-                        && action.acting_player === this.gameState.challenge_action.acting_player
-                        && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
-                        && isDeepStrictEqual(action.challenge_action, this.gameState.challenge_action);
-                case "Pass":
-                    switch (this.gameState.state) {
-                        case "awaiting_challenge":
-                            return action.acting_player !== this.gameState.challengable_action.acting_player
-                                && !this.gameState.passed_players.includes(action.acting_player)
-                                && isDeepStrictEqual(action.pass_on_action, this.gameState.challengable_action);
-                        case "awaiting_foreign_aid_block":
-                            return action.acting_player !== this.gameState.foreign_aid_action.acting_player
-                                && !this.gameState.passed_players.includes(action.acting_player)
-                                && isDeepStrictEqual(action.pass_on_action, this.gameState.foreign_aid_action);
-                        case "awaiting_action_target_counteraction":
-                            return action.acting_player === this.gameState.targeted_action.target_player
-                                && isDeepStrictEqual(action.pass_on_action, this.gameState.targeted_action);
-                        default:
-                            return false;
-                    }
+        }
+        switch (action.action_type) {
+            case "Income":
+            case "Foreign Aid":
+            case "Tax":
+            case "Exchange":
+                return true;
+            case "Coup":
+                return action.acting_player !== action.target_player
+                    && !this.playerEliminated(action.target_player)
+                    && this.playerCredits[action.acting_player] >= 7;
+            case "Assassinate":
+                return action.acting_player !== action.target_player
+                    && !this.playerEliminated(action.target_player)
+                    && this.playerCredits[action.acting_player] >= 3;
+            case "Steal":
+                return action.acting_player !== action.target_player
+                    && !this.playerEliminated(action.target_player)
+                    && this.playerCredits[action.target_player] > 0;
+            case "Choose Exchanged Influences":
+                return this.gameState.state === "awaiting_influence_exchange"
+                    && action.acting_player === this.gameState.exchanging_player
+                    && (
+                        (action.swap_influence_with[0] ?? action.swap_influence_with[1] === null)
+                        || action.swap_influence_with[0] !== action.swap_influence_with[1]
+                    )
+                    && (
+                        action.swap_influence_with[0] === null
+                        || !this.playerInfluences[action.acting_player][action.swap_influence_with[0]].discarded
+                    )
+                    && (
+                        action.swap_influence_with[1] === null
+                        || !this.playerInfluences[action.acting_player][action.swap_influence_with[1]].discarded
+                    );
+            case "Block Foreign Aid":
+                return this.gameState.state === "awaiting_foreign_aid_block"
+                    && action.acting_player === this.gameState.foreign_aid_action.acting_player
+                    && !this.gameState.passed_players.includes(action.acting_player)
+                    && isDeepStrictEqual(action.blocked_action, this.gameState.foreign_aid_action);
+            case "Block Stealing with Captain": {
+                return this.gameState.state === "awaiting_action_target_counteraction"
+                    && this.gameState.targeted_action.action_type === "Steal"
+                    && action.acting_player === this.gameState.targeted_action.target_player
+                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
             }
+            case "Block Stealing with Ambassador": {
+                return this.gameState.state === "awaiting_action_target_counteraction"
+                    && this.gameState.targeted_action.action_type === "Steal"
+                    && action.acting_player === this.gameState.targeted_action.target_player
+                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
+            }
+            case "Block Assassination": {
+                return this.gameState.state === "awaiting_action_target_counteraction"
+                    && this.gameState.targeted_action.action_type === "Assassinate"
+                    && action.acting_player === this.gameState.targeted_action.target_player
+                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
+            }
+            case "Challenge":
+                return this.gameState.state === "awaiting_challenge"
+                    && isDeepStrictEqual(action.challenged_action, this.gameState.challengable_action);
+            case "Reveal Challenge Result":
+                return this.gameState.state === "awaiting_challenge_reveal"
+                    && action.acting_player === this.gameState.challenge_action.acting_player
+                    && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
+                    && isDeepStrictEqual(action.challenge_action, this.gameState.challenge_action);
+            case "Discard Influence":
+                return this.gameState.state === "awaiting_discard_influence"
+                    && !this.playerInfluences[action.acting_player][action.influence_index].discarded
+                    && action.acting_player === this.gameState.causing_action.target_player
+                    && isDeepStrictEqual(action.causing_action, this.gameState.causing_action);
+            case "Pass": {
+                switch (this.gameState.state) {
+                    case "awaiting_challenge":
+                        return action.acting_player !== this.gameState.challengable_action.acting_player
+                            && !this.gameState.passed_players.includes(action.acting_player)
+                            && isDeepStrictEqual(action.pass_on_action, this.gameState.challengable_action);
+                    case "awaiting_foreign_aid_block":
+                        return action.acting_player !== this.gameState.foreign_aid_action.acting_player
+                            && !this.gameState.passed_players.includes(action.acting_player)
+                            && isDeepStrictEqual(action.pass_on_action, this.gameState.foreign_aid_action);
+                    case "awaiting_action_target_counteraction":
+                        return action.acting_player === this.gameState.targeted_action.target_player
+                            && isDeepStrictEqual(action.pass_on_action, this.gameState.targeted_action);
+                }
+                return false;
+            }
+            default:
+                const _exhaustive_check: never = action;
+                throw new Error(_exhaustive_check);
         }
     }
 
@@ -248,6 +258,7 @@ export class CoupGame {
             case "Reveal Challenge Result":
             case "forfeit":
             case "Choose Exchanged Influences":
+            case "Discard Influence":
                 // Unblockable/unchallengable
                 this.handleAction(action);
                 break;
@@ -312,7 +323,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "player_turn"
                     && action.acting_player === this.gameState.player
-                    && this.playerEliminated(action.acting_player)
+                    && !this.playerEliminated(action.acting_player)
                 );
                 this.playerCredits[action.acting_player] += 1;
                 this.setNextTurn();
@@ -322,7 +333,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "player_turn"
                     && action.acting_player === this.gameState.player
-                    && this.playerEliminated(action.acting_player)
+                    && !this.playerEliminated(action.acting_player)
                 );
                 this.playerCredits[action.acting_player] += 2;
                 this.setNextTurn();
@@ -332,7 +343,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "player_turn"
                     && action.acting_player === this.gameState.player
-                    && this.playerEliminated(action.acting_player)
+                    && !this.playerEliminated(action.acting_player)
                 );
                 this.playerCredits[action.acting_player] += 3;
                 this.setNextTurn();
@@ -342,7 +353,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "player_turn"
                     && action.acting_player === this.gameState.player
-                    && this.playerEliminated(action.acting_player)
+                    && !this.playerEliminated(action.acting_player)
                 );
                 this.gameState = {
                     state: "awaiting_influence_exchange",
@@ -355,7 +366,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "awaiting_influence_exchange"
                     && action.acting_player === this.gameState.exchanging_player
-                    && this.playerEliminated(action.acting_player)
+                    && !this.playerEliminated(action.acting_player)
                 );
                 const p = action.acting_player;
                 if (action.swap_influence_with[0] !== null) {
@@ -511,6 +522,12 @@ export class CoupGame {
                 }
                 return;
             }
+            case "Discard Influence":
+                assert(this.gameState.state === "awaiting_discard_influence");
+                assert(!this.playerInfluences[action.acting_player][action.influence_index].discarded);
+                this.playerInfluences[action.acting_player][action.influence_index].discarded = true;
+                this.setNextTurn();
+                return;
             case "forfeit": {
                 throw "todo";
                 break;
@@ -538,20 +555,26 @@ export class CoupGame {
 
     // Returns whether the game state changed while handling the lost influence
     private handleLoseInfluence(target: PlayerId, causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction): boolean {
-        if (!this.playerInfluences[target][0].discarded && !this.playerInfluences[target][1].discarded) {
-            this.gameState = {
-                state: "awaiting_discard_influence",
-                causing_action: causing_action,
-            };
-            return true;
-        }
-        if (this.playerEliminated(target)) {
-            return false;
-        }
-        if (this.playerInfluences[target][0].discarded) {
-            this.playerInfluences[target][1].discarded = true;
+        if (causing_action.action_type === "Reveal Challenge Result") {
+            const discardInx = causing_action.revealed_influence_index;
+            assert(!this.playerInfluences[target][discardInx].discarded);
+            this.playerInfluences[target][discardInx].discarded = true;
         } else {
-            this.playerInfluences[target][0].discarded = true;
+            if (!this.playerInfluences[target][0].discarded && !this.playerInfluences[target][1].discarded) {
+                this.gameState = {
+                    state: "awaiting_discard_influence",
+                    causing_action: causing_action,
+                };
+                return true;
+            }
+            if (this.playerEliminated(target)) {
+                return false;
+            }
+            if (this.playerInfluences[target][0].discarded) {
+                this.playerInfluences[target][1].discarded = true;
+            } else {
+                this.playerInfluences[target][0].discarded = true;
+            }
         }
         const winner = this.gameWinner();
         if (winner !== null) {
@@ -565,7 +588,14 @@ export class CoupGame {
     }
 
     private setNextTurn() {
-        assert(this.gameWinner() === null);
+        const winner = this.gameWinner();
+        if (winner !== null) {
+            this.gameState = {
+                state: "game_over",
+                winning_player: winner,
+            };
+            return;
+        }
         do {
             this.currentTurn = (this.currentTurn + 1) % this.playerCount;
         } while (this.playerEliminated(this.currentPlayer()));

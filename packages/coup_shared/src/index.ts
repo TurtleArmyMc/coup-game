@@ -15,7 +15,7 @@ export type ClientToServerPacket = {
 
 export type ServerToClientPacket = {
     game_state: ClientGameState,
-    hands_state: HandsState
+    hands_state: HandsState,
 }
 
 export type ClientGameState =
@@ -29,9 +29,10 @@ export type ClientGameState =
     | PlayerWon;
 
 export type HandsState = {
-    influences_discarded: [boolean, boolean][],
+    influences_discarded: [Influence | null, Influence | null][],
     player_credits: number[],
-    player_influences: [Influence, Influence],
+    this_player_id: PlayerId,
+    this_player_influences: [Influence, Influence],
 };
 
 export type AwaitingTurnAction = {
@@ -69,7 +70,7 @@ export type AwaitingChallengeResultReveal = {
 
 export type AwaitingDiscardInfluence = {
     state: "awaiting_discard_influence",
-    causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction,
+    causing_action: CoupAction | AssassinateAction,
 }
 
 export type PlayerWon = {
@@ -79,10 +80,11 @@ export type PlayerWon = {
 
 export type Action =
     TurnAction
-    | ChooseExchangedInfluences
+    | ChooseExchangedInfluencesAction
     | CounterAction
     | ChallengeAction
     | PassAction
+    | DiscardInfluenceAction
     | RevealChallengeResultAction
     | ForfeitAction;
 
@@ -123,7 +125,7 @@ export type ExchangeAction = {
 }
 
 // TODO: Let client choose the order to return influences to deck in?
-export type ChooseExchangedInfluences = {
+export type ChooseExchangedInfluencesAction = {
     action_type: "Choose Exchanged Influences",
     acting_player: PlayerId,
     swap_influence_with: [0 | 1 | null, 0 | 1 | null],
@@ -185,7 +187,7 @@ export type DiscardInfluenceAction = {
 export type PassAction = {
     action_type: "Pass",
     acting_player: PlayerId,
-    pass_on_action: ChallengeAction | ForeignAidAction | AssassinateAction | StealAction,
+    pass_on_action: ChallengableAction | ForeignAidAction | AssassinateAction | StealAction,
 }
 
 export type RevealChallengeResultAction = {
@@ -263,4 +265,66 @@ export function challengableActionInfluence(action: ChallengableActionType): Inf
         case "Block Assassination":
             return "Contessa";
     }
+}
+
+export function clientValidActionTypes({ game_state, hands_state }: ServerToClientPacket): ActionType[] {
+    if (game_state.state === "game_over") {
+        return [];
+    }
+    const actingPlayer = hands_state.this_player_id;
+    if (hands_state.influences_discarded[actingPlayer].findIndex(i => i === null) === -1) {
+        return [];
+    }
+    const actions: ActionType[] = ["forfeit"];
+    switch (game_state.state) {
+        case "player_turn":
+            if (game_state.player !== actingPlayer) {
+                return actions;
+            }
+            if (hands_state.player_credits[actingPlayer] >= 3) {
+                actions.push("Assassinate");
+            }
+            if (hands_state.player_credits[actingPlayer] >= 7) {
+                actions.push("Coup");
+            }
+            return [...actions, "Income", "Foreign Aid", "Tax", "Steal", "Exchange"]
+        case "awaiting_challenge_reveal":
+            if (game_state.challenge_action.challenged_action.acting_player === actingPlayer) {
+                actions.push("Reveal Challenge Result");
+            }
+            return actions;
+        case "awaiting_influence_exchange":
+            if (game_state.exchanging_player === actingPlayer) {
+                return [...actions, "Choose Exchanged Influences"];
+            }
+            return actions;
+        case "awaiting_foreign_aid_block":
+            if (game_state.foreign_aid_action.acting_player === actingPlayer) {
+                return actions;
+            }
+            if (game_state.player_passed) {
+                return actions;
+            }
+            return [...actions, "Pass", "Block Foreign Aid"];
+        case "awaiting_action_target_counteraction":
+            if (game_state.targeted_action.acting_player !== actingPlayer) {
+                return actions;
+            }
+            actions.push("Pass");
+            switch (game_state.targeted_action.action_type) {
+                case "Assassinate":
+                    return [...actions, "Block Assassination"];
+                case "Steal":
+                    return [...actions, "Block Stealing with Captain", "Block Stealing with Ambassador"];
+            }
+        case "awaiting_challenge":
+            if (game_state.player_passed) {
+                return actions;
+            }
+            return [...actions, "Pass", "Challenge"];
+        case "awaiting_discard_influence":
+            // const discardingPlayer = game_state.causing_action.action_type === "Reveal Challenge Result" ? game_state.causing_action.acting_player
+            return [...actions, "Discard Influence"];
+    }
+    return actions;
 }

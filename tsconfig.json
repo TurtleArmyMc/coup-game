@@ -3,7 +3,7 @@
     "compilerOptions": {
         "incremental": true,
         "target": "es2019",
-        "module": "commonjs",
+        "module": "ESNext",
         "declaration": true,
         "sourceMap": true,
         "composite": true,

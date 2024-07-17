@@ -1,7 +1,14 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist"
+    "outDir": "dist",
+    "module": "ESNext",
   },
-  "references": [{ "path": "../coup_shared" }, { "path": "../coup_game" }]
+  "references": [{ "path": "../coup_shared" }, { "path": "../coup_game" }],
+  "module": "ESNext",
+  "moduleResolution": "node",
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node",
+ },
 }

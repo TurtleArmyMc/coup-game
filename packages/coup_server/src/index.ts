@@ -1,8 +1,9 @@
-import { ClientToServerPacket, PlayerId, ServerToClientPacket } from "coup_shared";
+import { ClientToServerPacket, PlayerId, ServerToClientPacket, clientValidActionTypes } from "coup_shared";
 import { CoupGame } from "coup_game";
 import express from 'express';
 import expressWs from 'express-ws';
 import type { WebSocket } from "ws";
+import cors from 'cors';
 import assert from "assert";
 
 type UserId = number;
@@ -28,6 +29,7 @@ class Lobby {
     }
 
     addUser(name: string, ws: WebSocket): UserId {
+        console.log(`Added ${name}`);
         const id = this.users.length;
         const user: User = { name, id, ws };
         this.users.push(user);
@@ -39,6 +41,7 @@ class Lobby {
         if (this.gameInfo !== null) {
             throw new Error("game already started");
         }
+        console.log("STARTING GAME");
         const playingUsers = this.users.filter(u => u.ws !== null);
         const userIdToGameId = new Map();
         const turnOrder = [];
@@ -51,10 +54,17 @@ class Lobby {
             userIdToGameId,
         };
         for (const user of playingUsers) {
+            const pid = userIdToGameId.get(user.id);
             user.ws!.onmessage = msg => {
                 assert(typeof msg.data === "string");
-                this.receivePacket(user.id, JSON.parse(msg.data));
+                this.receivePacket(user.id, JSON.parse(msg.data) as ClientToServerPacket);
             }
+            user.ws!.send(JSON.stringify(playingUsers.map(u => u.name)));
+            const initial_packet: ServerToClientPacket = {
+                game_state: this.gameInfo.game.getGameState(pid),
+                hands_state: this.gameInfo.game.getHandsState(pid),
+            };
+            user.ws!.send(JSON.stringify(initial_packet));
             user.ws!.on(
                 "close",
                 () => this.receivePacket(
@@ -62,7 +72,7 @@ class Lobby {
                     {
                         action: {
                             action_type: "forfeit",
-                            acting_player: userIdToGameId.get(user.id),
+                            acting_player: pid,
                         }
                     }
                 )
@@ -71,9 +81,14 @@ class Lobby {
     }
 
     private receivePacket(sender: UserId, packet: ClientToServerPacket) {
+        console.log("Received");
+        console.log(packet);
         if (this.gameInfo) {
             const { game, userIdToGameId } = this.gameInfo;
             const playerId: PlayerId = userIdToGameId.get(sender)!;
+            if (playerId != packet.action.acting_player) {
+                return;
+            }
             const stateBefore = game.getGameState(playerId);
             if (game.makeAction(packet.action)) {
                 const stateAfter = game.getGameState(playerId);
@@ -109,9 +124,7 @@ class Lobby {
                 game_state: game.getGameState(broadcastTo),
                 hands_state: game.getHandsState(broadcastTo),
             };
-            ws.send(JSON.stringify(
-                {}
-            ));
+            ws.send(JSON.stringify(packet));
         }
     }
 }
@@ -119,15 +132,17 @@ class Lobby {
 const GLOBAL_LOBBY: Lobby = new Lobby("Coup");
 
 const app = expressWs(express()).app;
-expressWs(app);
 const port = 3000;
 
+app.use(cors())
 
 app.get('/', (req, res) => {
+    console.log("Hello world!");
     res.send("Hello world!");
 });
 
-app.ws('ping', (ws: WebSocket, req) => {
+app.ws('/ping', (ws: WebSocket, req) => {
+    console.log("B");
     ws.send("ping");
 
     ws.on('message', msg => {
@@ -139,10 +154,16 @@ app.ws('ping', (ws: WebSocket, req) => {
     });
 });
 
-app.ws('ws/:lobby/:username', (ws, req) => {
+app.ws('/ws/:lobby/:username', (ws, req) => {
+    console.log("A");
+
     const { lobby, username } = req.params;
 
     // TODO: Multiple lobbies
+    if (GLOBAL_LOBBY.gameInfo) {
+        ws.close();
+        return;
+    }
     GLOBAL_LOBBY.addUser(username, ws);
     if (GLOBAL_LOBBY.users.filter(u => u.ws).length === 3 && GLOBAL_LOBBY.gameInfo === null) {
         GLOBAL_LOBBY.startGame();

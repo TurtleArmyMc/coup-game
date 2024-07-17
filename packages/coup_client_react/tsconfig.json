@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "files": [],
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "references": [
+    {
+      "path": "../coup_shared"
+    },
+    {
+      "path": "../coup_game"
+    },
+    {
+      "path": "./tsconfig.app.json"
+    },
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ]
+}
