@@ -1,4 +1,4 @@
-import { Action, INFLUENCE_LIST, Influence, PlayerId, isTurnAction, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, isCounterAction, ClientGameState, AwaitingTurnAction, AwaitingInfluenceExchange, AwaitingForeignAidBlock, AwaitingTargetCounteraction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState, ActionType } from "coup_shared";
+import { Action, INFLUENCE_LIST, Influence, PlayerId, isTurnAction, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, isCounterAction, ClientGameState, AwaitingTurn, AwaitingInfluenceExchange, AwaitingForeignAidBlock, AwaitingTargetCounteraction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState, ActionType, ExchangeAction } from "coup_shared";
 import { isDeepStrictEqual } from "util";
 import assert from 'node:assert/strict';
 
@@ -11,7 +11,7 @@ export class CoupGame {
 
     readonly turnOrder: PlayerId[];
     // An index in `turnOrder`
-    private currentTurn: number;
+    private currentPlayerInx: number;
 
     private playerInfluences: [HeldInfluence, HeldInfluence][];
     private playerCredits: number[];
@@ -23,7 +23,7 @@ export class CoupGame {
         assert(this.playerCount === new Set(turn_order).size);
 
         this.turnOrder = turn_order;
-        this.currentTurn = 0;
+        this.currentPlayerInx = 0;
 
         this.deck = [];
         for (const influence of INFLUENCE_LIST) {
@@ -46,7 +46,8 @@ export class CoupGame {
 
         this.gameState = {
             state: "player_turn",
-            player: turn_order[this.currentTurn],
+            player: turn_order[this.currentPlayerInx],
+            turn_number: 1,
         }
     }
 
@@ -74,7 +75,7 @@ export class CoupGame {
     }
 
     currentPlayer(): PlayerId {
-        return this.gameWinner() ?? this.turnOrder[this.currentTurn];
+        return this.gameWinner() ?? this.turnOrder[this.currentPlayerInx];
     }
 
     getHandsState(stateFor: PlayerId): HandsState {
@@ -97,7 +98,7 @@ export class CoupGame {
                 this.gameState.new_influences
                 return {
                     state: "awaiting_influence_exchange",
-                    exchanging_player: this.gameState.exchanging_player,
+                    exchange_action: this.gameState.exchange_action,
                     new_influences: (stateFor === this.gameState.exchanging_player) ? this.gameState.new_influences : null,
                 };
             case "awaiting_foreign_aid_block":
@@ -130,6 +131,7 @@ export class CoupGame {
     // has any influences once the assassination is attempted to be executed.
     private actionIsValid(action: Action): boolean {
         // TODO: Add bounds checks to indices?
+        // TODO: Add checks for the current turn
         if (this.gameState.state === "game_over") {
             return false;
         }
@@ -139,10 +141,12 @@ export class CoupGame {
         if (this.playerEliminated(action.acting_player)) {
             return false;
         }
-        if (this.playerCredits[action.acting_player] >= 10) {
+        if (
+            this.gameState.state === "player_turn"
+            && action.acting_player === this.gameState.player
+            && this.playerCredits[action.acting_player] >= 10
+        ) {
             return action.action_type === "Coup"
-                && this.gameState.state === "player_turn"
-                && action.acting_player === this.gameState.player
                 && action.acting_player !== action.target_player
                 && !this.playerEliminated(action.target_player);
         }
@@ -189,7 +193,7 @@ export class CoupGame {
                     );
             case "Block Foreign Aid":
                 return this.gameState.state === "awaiting_foreign_aid_block"
-                    && action.acting_player === this.gameState.foreign_aid_action.acting_player
+                    && action.acting_player !== this.gameState.foreign_aid_action.acting_player
                     && !this.gameState.passed_players.includes(action.acting_player)
                     && isDeepStrictEqual(action.blocked_action, this.gameState.foreign_aid_action);
             case "Block Stealing with Captain": {
@@ -215,13 +219,25 @@ export class CoupGame {
                     && isDeepStrictEqual(action.challenged_action, this.gameState.challengable_action);
             case "Reveal Challenge Result":
                 return this.gameState.state === "awaiting_challenge_reveal"
-                    && action.acting_player === this.gameState.challenge_action.acting_player
+                    && action.acting_player === this.gameState.challenge_action.challenged_action.acting_player
                     && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
                     && isDeepStrictEqual(action.challenge_action, this.gameState.challenge_action);
             case "Discard Influence":
                 return this.gameState.state === "awaiting_discard_influence"
                     && !this.playerInfluences[action.acting_player][action.influence_index].discarded
-                    && action.acting_player === this.gameState.causing_action.target_player
+                    && (
+                        (
+                            this.gameState.causing_action.action_type === "Reveal Challenge Result"
+                            && action.acting_player === this.gameState.causing_action.challenge_action.acting_player
+                        )
+                        || (
+                            (
+                                this.gameState.causing_action.action_type === "Assassinate"
+                                || this.gameState.causing_action.action_type === "Coup"
+                            )
+                            && action.acting_player === this.gameState.causing_action.target_player
+                        )
+                    )
                     && isDeepStrictEqual(action.causing_action, this.gameState.causing_action);
             case "Pass": {
                 switch (this.gameState.state) {
@@ -270,19 +286,13 @@ export class CoupGame {
                     passed_players: [],
                 };
                 break;
-            case "Assassinate":
-            case "Steal":
-                // Blockable by target
-                this.gameState = {
-                    state: "awaiting_action_target_counteraction",
-                    targeted_action: action,
-                };
-                break;
             case "Exchange":
             case "Tax":
             case "Block Stealing with Captain":
             case "Block Stealing with Ambassador":
             case "Block Assassination":
+            case "Assassinate":
+            case "Steal":
                 // Challengable
                 this.gameState = {
                     state: "awaiting_challenge",
@@ -358,6 +368,7 @@ export class CoupGame {
                 this.gameState = {
                     state: "awaiting_influence_exchange",
                     exchanging_player: action.acting_player,
+                    exchange_action: action,
                     new_influences: [this.deck.pop()!, this.deck.pop()!],
                 };
                 return;
@@ -382,6 +393,7 @@ export class CoupGame {
                 this.deck.splice(0, 0, this.gameState.new_influences[0]);
                 this.deck.splice(0, 0, this.gameState.new_influences[1]);
 
+                this.gameState = this.gameState.exchange_action.on_turn;
                 this.setNextTurn();
                 return;
             }
@@ -427,8 +439,10 @@ export class CoupGame {
                 // result of a failed challenge by the time the steal is handled
                 // though.
                 const credits = Math.min(this.playerCredits[action.target_player], 2)
-                this.playerCredits[action.target_player] += credits;
+                this.playerCredits[action.target_player] -= credits;
                 this.playerCredits[action.acting_player] += credits;
+
+                this.setNextTurn();
                 return;
             }
             case "Block Foreign Aid": {
@@ -446,6 +460,7 @@ export class CoupGame {
                     && this.gameState.targeted_action.action_type === "Steal"
                     && !this.playerEliminated(action.acting_player)
                 );
+                this.gameState = this.gameState.targeted_action.on_turn;
                 this.setNextTurn();
                 return;
             }
@@ -455,6 +470,7 @@ export class CoupGame {
                     && this.gameState.targeted_action.action_type === "Assassinate"
                     && !this.playerEliminated(action.acting_player)
                 );
+                this.gameState = this.gameState.targeted_action.on_turn;
                 this.setNextTurn();
                 return;
             }
@@ -474,6 +490,7 @@ export class CoupGame {
                 assert(
                     this.gameState.state === "awaiting_challenge_reveal"
                     && action.acting_player === this.gameState.challenge_action.challenged_action.acting_player
+                    && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
                 );
                 const challengedAction = action.challenge_action.challenged_action;
                 const revealedInfluence = this.playerInfluences[action.acting_player][action.revealed_influence_index].influence;
@@ -488,64 +505,140 @@ export class CoupGame {
                     this.deck.splice(0, 0, revealedInfluence);
                     this.playerInfluences[action.acting_player][action.revealed_influence_index].influence = this.deck.pop()!;
 
-                    assert(this.gameState.state === "awaiting_challenge_reveal");
-                    this.handleAction(this.gameState.challenge_action.challenged_action);
+                    this.resumeHandlingChallengedAction(challengedAction);
+                    return;
                 } else {
-                    this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded = true;
-                    const winner = this.gameWinner();
-                    if (winner !== null) {
-                        this.gameState = {
-                            state: "game_over",
-                            winning_player: winner,
-                        };
-                        return
-                    }
-                    if (isCounterAction(challengedAction.action_type)) {
-                        if (challengedAction.action_type === "Block Foreign Aid") {
+                    // Action successfully challenged
+                    this.handleLoseInfluence(action.acting_player, action);
+
+                    switch (challengedAction.action_type) {
+                        // Stop handling the successfully challenged action
+                        case "Block Foreign Aid": {
                             const foreignAidBlockPasses = [...this.gameState.foreign_aid_passes, action.challenge_action.acting_player];
-                            if (!this.allVotedOnForeignAidBlock(challengedAction.acting_player, foreignAidBlockPasses)) {
+                            if (!this.allPlayersPassed(challengedAction.acting_player, foreignAidBlockPasses)) {
                                 this.gameState = {
                                     state: "awaiting_foreign_aid_block",
                                     foreign_aid_action: challengedAction.blocked_action,
                                     passed_players: foreignAidBlockPasses,
                                 };
-                                return;
                             }
+                            return;
                         }
-                        // TODO: Can this compile without this assertion?
-                        const a = challengedAction.action_type;
-                        assert(a === "Block Assassination" || a === "Block Foreign Aid" || a === "Block Stealing with Ambassador" || a === "Block Stealing with Captain");
-                        this.handleAction(challengedAction.blocked_action);
-                    } else {
-                        this.setNextTurn();
+                        case "Block Stealing with Captain":
+                        case "Block Stealing with Ambassador":
+                        case "Block Assassination": {
+                            this.gameState = challengedAction.blocked_action.on_turn;
+                            this.handleAction(challengedAction.blocked_action);
+                            return;
+                        }
+                        case "Assassinate":
+                        case "Steal":
+                        case "Tax":
+                        case "Exchange": {
+                            this.gameState = challengedAction.on_turn;
+                            this.setNextTurn();
+                            return;
+                        }
+                        default: {
+                            const _exhaustive_check: never = challengedAction;
+                            throw new Error(_exhaustive_check);
+                        }
                     }
                 }
-                return;
             }
-            case "Discard Influence":
+            case "Discard Influence": {
                 assert(this.gameState.state === "awaiting_discard_influence");
                 assert(!this.playerInfluences[action.acting_player][action.influence_index].discarded);
                 this.playerInfluences[action.acting_player][action.influence_index].discarded = true;
-                this.setNextTurn();
-                return;
+                const winner = this.gameWinner();
+                if (winner !== null) {
+                    this.gameState = {
+                        state: "game_over",
+                        winning_player: winner,
+                    };
+                    return;
+                }
+                switch (action.causing_action.action_type) {
+                    case "Coup":
+                    case "Assassinate":
+                        this.gameState = action.causing_action.on_turn
+                        this.setNextTurn();
+                        return;
+                    case "Reveal Challenge Result": {
+                        this.resumeHandlingChallengedAction(action.causing_action.challenge_action.challenged_action);
+                        return;
+                    }
+                    default: {
+                        const _exhaustive_check: never = action.causing_action;
+                        throw new Error(_exhaustive_check);
+                    }
+                }
+            }
             case "forfeit": {
                 throw "todo";
                 break;
             }
             case "Pass": {
-                if (this.gameState.state === "awaiting_action_target_counteraction") {
-                    assert(action.acting_player === this.gameState.targeted_action.target_player);
-                    this.handleAction(this.gameState.targeted_action);
-                } else if (this.gameState.state === "awaiting_foreign_aid_block") {
-                    assert(action.acting_player === this.gameState.foreign_aid_action.acting_player);
-                    assert(!this.gameState.passed_players.includes(action.acting_player));
-                    this.gameState.passed_players.push(action.acting_player);
-                    if (!this.allVotedOnForeignAidBlock(action.pass_on_action.acting_player, this.gameState.passed_players)) {
+                switch (this.gameState.state) {
+                    case "awaiting_action_target_counteraction": {
+                        assert(action.acting_player === this.gameState.targeted_action.target_player);
+                        const targetedAction = this.gameState.targeted_action;
+                        this.gameState = targetedAction.on_turn;
+                        this.handleAction(targetedAction);
                         return;
                     }
-                    this.handleAction(this.gameState.foreign_aid_action);
+                    case "awaiting_foreign_aid_block": {
+                        assert(action.acting_player !== this.gameState.foreign_aid_action.acting_player);
+                        assert(!this.gameState.passed_players.includes(action.acting_player));
+                        const foreignAidAction = this.gameState.foreign_aid_action;
+                        this.gameState.passed_players.push(action.acting_player);
+                        if (!this.allPlayersPassed(action.pass_on_action.acting_player, this.gameState.passed_players)) {
+                            return;
+                        }
+                        this.gameState = foreignAidAction.on_turn;
+                        this.handleAction(foreignAidAction);
+                        return;
+                    }
+                    case "awaiting_challenge": {
+                        assert(action.acting_player !== this.gameState.challengable_action.acting_player);
+                        assert(!this.gameState.passed_players.includes(action.acting_player));
+                        this.gameState.passed_players.push(action.acting_player);
+                        if (!this.allPlayersPassed(action.pass_on_action.acting_player, this.gameState.passed_players)) {
+                            return;
+                        }
+                        const challengableAction = this.gameState.challengable_action;
+                        switch (challengableAction.action_type) {
+                            case "Block Foreign Aid":
+                            case "Block Stealing with Captain":
+                            case "Block Stealing with Ambassador":
+                            case "Block Assassination": {
+                                // FIXME: handleAction will never get run for these 4 action types?
+                                this.gameState = challengableAction.blocked_action.on_turn;
+                                this.setNextTurn();
+                                return;
+                            }
+                            case "Tax":
+                            case "Exchange": {
+                                this.gameState = challengableAction.on_turn;
+                                this.handleAction(challengableAction);
+                                return;
+                            }
+                            case "Assassinate":
+                            case "Steal": {
+                                this.gameState = {
+                                    state: "awaiting_action_target_counteraction",
+                                    targeted_action: challengableAction,
+                                };
+                                return;
+                            }
+                        }
+                    }
+                    case "player_turn":
+                    case "awaiting_influence_exchange":
+                    case "awaiting_challenge_reveal":
+                    case "awaiting_discard_influence":
+                        throw new Error(`can not pass during state ${this.gameState.state}`);
                 }
-                return;
             }
             default:
                 const _exhaustive_check: never = action;
@@ -553,9 +646,43 @@ export class CoupGame {
         }
     }
 
+    resumeHandlingChallengedAction(challengedAction: ChallengableAction) {
+        switch (challengedAction.action_type) {
+            case "Tax":
+            case "Exchange": {
+                this.gameState = challengedAction.on_turn;
+                this.handleAction(challengedAction);
+                return;
+            }
+            case "Assassinate":
+            case "Steal": {
+                this.gameState = {
+                    state: "awaiting_action_target_counteraction",
+                    targeted_action: challengedAction,
+                }
+                return;
+            }
+            case "Block Foreign Aid":
+            case "Block Stealing with Captain":
+            case "Block Stealing with Ambassador":
+            case "Block Assassination": {
+                this.gameState = challengedAction.blocked_action.on_turn;
+                this.setNextTurn();
+                return;
+            }
+            default: {
+                const _exhaustive_check: never = challengedAction;
+                throw new Error(_exhaustive_check);
+            }
+        }
+    }
+
     // Returns whether the game state changed while handling the lost influence
     private handleLoseInfluence(target: PlayerId, causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction): boolean {
-        if (causing_action.action_type === "Reveal Challenge Result") {
+        if (
+            causing_action.action_type === "Reveal Challenge Result"
+            && target === causing_action.challenge_action.challenged_action.acting_player
+        ) {
             const discardInx = causing_action.revealed_influence_index;
             assert(!this.playerInfluences[target][discardInx].discarded);
             this.playerInfluences[target][discardInx].discarded = true;
@@ -564,6 +691,11 @@ export class CoupGame {
                 this.gameState = {
                     state: "awaiting_discard_influence",
                     causing_action: causing_action,
+                    foreign_aid_passes: (
+                        this.gameState.state !== "awaiting_challenge"
+                        && this.gameState.state !== "awaiting_challenge_reveal"
+                        && this.gameState.state !== "awaiting_discard_influence"
+                    ) ? [] : this.gameState.foreign_aid_passes,
                 };
                 return true;
             }
@@ -596,12 +728,16 @@ export class CoupGame {
             };
             return;
         }
+        // Make sure the code before this properly handled all pending actions,
+        // unwrapping state all the way back down to "player_turn"
+        assert(this.gameState.state === "player_turn");
         do {
-            this.currentTurn = (this.currentTurn + 1) % this.playerCount;
+            this.currentPlayerInx = (this.currentPlayerInx + 1) % this.playerCount;
         } while (this.playerEliminated(this.currentPlayer()));
         this.gameState = {
             state: "player_turn",
-            player: this.currentPlayer()
+            player: this.currentPlayer(),
+            turn_number: this.gameState.turn_number + 1,
         };
     }
 
@@ -609,7 +745,7 @@ export class CoupGame {
         return this.playerInfluences[player][0].discarded && this.playerInfluences[player][1].discarded;
     }
 
-    private allVotedOnForeignAidBlock(foreignAidActor: PlayerId, passes: PlayerId[]) {
+    private allPlayersPassed(foreignAidActor: PlayerId, passes: PlayerId[]) {
         for (let p = 0; p < this.playerCount; p++) {
             if (
                 !this.playerEliminated(p)
@@ -624,19 +760,20 @@ export class CoupGame {
 }
 
 type ServerGameState =
-    AwaitingTurnAction
+    AwaitingTurn
     | ServerAwaitingInfluenceExchange
     | ServerAwaitingForeignAidBlock
     | AwaitingTargetCounteraction
     | ServerAwaitingActionChallenge
     | ServerAwaitingChallengeResultReveal
-    | AwaitingDiscardInfluence
+    | ServerAwaitingDiscardInfluence
     | PlayerWon;
 
 type ServerAwaitingInfluenceExchange = {
     state: "awaiting_influence_exchange",
     exchanging_player: PlayerId,
-    new_influences: [Influence, Influence];
+    exchange_action: ExchangeAction,
+    new_influences: [Influence, Influence],
 }
 
 type ServerAwaitingForeignAidBlock = {
@@ -657,6 +794,13 @@ type ServerAwaitingActionChallenge = {
 type ServerAwaitingChallengeResultReveal = {
     state: "awaiting_challenge_reveal",
     challenge_action: ChallengeAction,
+    foreign_aid_passes: PlayerId[],
+};
+
+// TODO: Factor out waiting for a challenge against blocking foreign aid?
+type ServerAwaitingDiscardInfluence = {
+    state: "awaiting_discard_influence",
+    causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction,
     foreign_aid_passes: PlayerId[],
 };
 

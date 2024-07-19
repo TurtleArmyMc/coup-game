@@ -1,4 +1,4 @@
-import { AssassinateAction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, AwaitingForeignAidBlock, AwaitingInfluenceExchange, AwaitingTargetCounteraction, ClientGameState, ClientToServerPacket, HandsState, Influence, PlayerId, StealAction, clientValidActionTypes } from "coup_shared";
+import { AssassinateAction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, AwaitingForeignAidBlock, AwaitingInfluenceExchange, AwaitingTargetCounteraction, AwaitingTurn, ClientGameState, ClientToServerPacket, HandsState, Influence, PlayerId, StealAction, clientValidActionTypes } from "coup_shared";
 import OtherPlayerInfo from "./OtherPlayerInfo";
 import PlayerHandDisplay from "./PlayerHandDisplay";
 
@@ -27,6 +27,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         action: {
                             action_type: "Income",
                             acting_player: pid,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     }
                 });
@@ -38,6 +39,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         action: {
                             action_type: "Foreign Aid",
                             acting_player: pid,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     }
                 });
@@ -49,6 +51,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         action: {
                             action_type: "Tax",
                             acting_player: pid,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     }
                 });
@@ -60,6 +63,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         action: {
                             action_type: "Exchange",
                             acting_player: pid,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     }
                 });
@@ -173,6 +177,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Coup",
                                 acting_player: pid,
                                 target_player: target,
+                                on_turn: (gameState as AwaitingTurn),
                             }
                         }
                     });
@@ -193,6 +198,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Assassinate",
                                 acting_player: pid,
                                 target_player: target,
+                                on_turn: (gameState as AwaitingTurn),
                             }
                         }
                     });
@@ -216,6 +222,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Steal",
                                 acting_player: pid,
                                 target_player: target,
+                                on_turn: (gameState as AwaitingTurn),
                             }
                         }
                     });
@@ -223,7 +230,8 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 break;
             case "Choose Exchanged Influences": {
                 const [oldL, oldR] = handsState.this_player_influences;
-                const [newL, newR] = (gameState as AwaitingInfluenceExchange).new_influences!;
+                const gs = gameState as AwaitingInfluenceExchange;
+                const [newL, newR] = gs.new_influences!;
                 if (playerInfluencesDiscarded[0] || playerInfluencesDiscarded[1]) {
                     const oldInf = (oldL ?? oldR)!;
                     actions.push({
@@ -233,6 +241,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [null, null],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -243,6 +252,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [playerInfluencesDiscarded[0] ? 1 : 0, null],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -253,6 +263,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [null, playerInfluencesDiscarded[0] ? 1 : 0],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -265,6 +276,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [null, null],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -276,6 +288,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [1, null],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -287,6 +300,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [null, 1],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -298,6 +312,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [0, null],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -309,6 +324,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [null, 0],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -320,6 +336,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: pid,
                                 swap_influence_with: [0, 1],
+                                exchange_action: gs.exchange_action,
                             }
                         }
                     });
@@ -353,7 +370,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     }
                     case "Assassinate": {
                         const target = gs.challengable_action.target_player === pid ? "you" : usernames[gs.challengable_action.target_player];
-                        label = `Challenge ${challengable} blocking ${target} from assassinating with a Contessa`;
+                        label = `Challenge ${challengable} assassinating ${target} with an Assassin`;
                         break;
                     }
                     case "Steal": {

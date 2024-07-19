@@ -80,6 +80,45 @@ class Lobby {
         }
     }
 
+    private restartGame() {
+        console.log("RESTARTING GAME");
+        const playingUsers = this.users.filter(u => u.ws !== null);
+        const userIdToGameId = new Map();
+        const turnOrder = [];
+        for (let playerId = 0; playerId < playingUsers.length; playerId++) {
+            userIdToGameId.set(playingUsers[playerId].id, playerId);
+            turnOrder.push(playerId);
+        }
+        this.gameInfo = {
+            game: new CoupGame(turnOrder),
+            userIdToGameId,
+        };
+        for (const user of playingUsers) {
+            const pid = userIdToGameId.get(user.id);
+            user.ws!.onmessage = msg => {
+                assert(typeof msg.data === "string");
+                this.receivePacket(user.id, JSON.parse(msg.data) as ClientToServerPacket);
+            }
+            const initial_packet: ServerToClientPacket = {
+                game_state: this.gameInfo.game.getGameState(pid),
+                hands_state: this.gameInfo.game.getHandsState(pid),
+            };
+            user.ws!.send(JSON.stringify(initial_packet));
+            user.ws!.on(
+                "close",
+                () => this.receivePacket(
+                    user.id,
+                    {
+                        action: {
+                            action_type: "forfeit",
+                            acting_player: pid,
+                        }
+                    }
+                )
+            );
+        }
+    }
+
     private receivePacket(sender: UserId, packet: ClientToServerPacket) {
         console.log("Received");
         console.log(packet);
@@ -105,7 +144,12 @@ class Lobby {
                     this.broadcastState(sender);
                 } else {
                     this.broadcastStateToAll();
+                    if (stateAfter.state === "game_over") {
+                        setTimeout(() => this.restartGame(), 5000);
+                    }
                 }
+            } else {
+                console.log("Received action invalid");
             }
         }
     }
