@@ -6,6 +6,7 @@ import { ClientGameState, HandsState, ServerToClientPacket } from 'coup_shared';
 
 function App() {
   const [playerName, setPlayerName] = useState<string | null>(null);
+  const [submittedUsername, setSubmittedUsername] = useState<boolean>(false);
   const ws = useRef<WebSocket | null>(null);
   // const [usernames, setUsernames] = useState<string[]>([]);
   const [usernames, setUsernames] = useState<string[]>(["A", "B", "C"]);
@@ -31,7 +32,7 @@ function App() {
       console.log("B");
       let path = window.location.href;
       if (path.charAt(path.length - 1) != '/') path = path + '/';
-      path = path + `ws/lobby/${playerName!}` ;
+      path = path + `ws/lobby/${playerName!}`;
       const url = new URL(path);
       url.port = "3000";
       url.protocol = url.protocol.replace('http', 'ws');
@@ -55,7 +56,7 @@ function App() {
       ws.current = socket;
       return socket.close;
     },
-    [playerName],
+    [submittedUsername],
   );
 
   if (gameState && handsState) {
@@ -76,7 +77,7 @@ function App() {
         </Game>
       </>
     );
-  } else if (playerName) {
+  } else if (submittedUsername) {
     return (
       <>
         <h1>COUP</h1>
@@ -87,8 +88,10 @@ function App() {
     return (
       <>
         <h1>COUP</h1>
-        <input
-          onChange={(e) => setPlayerName(e.target.value)}></input>
+        <form onSubmit={() => setSubmittedUsername(true)}>
+          <input
+            onChange={(e) => setPlayerName(e.target.value)}></input>
+        </form>
       </>
     );
   }
