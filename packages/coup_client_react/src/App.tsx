@@ -62,7 +62,8 @@ function App() {
   if (gameState && handsState) {
     return (
       <>
-        <h1>COUP</h1>
+        <h1 style = {{fontSize: "6vh"}}
+        >COUP</h1>
         {/* <p>{resp}</p> */}
         <Game
           gameState={gameState}
