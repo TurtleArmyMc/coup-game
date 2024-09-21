@@ -61,9 +61,10 @@ function App() {
 
   if (gameState && handsState) {
     return (
-      <>
-        <h1 style = {{fontSize: "6vh"}}
+      <><div className='flex flex-col items-center m-10'>
+        <h1 className="font-bold"
         >COUP</h1>
+      </div>
         {/* <p>{resp}</p> */}
         <Game
           gameState={gameState}
@@ -80,19 +81,21 @@ function App() {
     );
   } else if (submittedUsername) {
     return (
-      <>
-        <h1>COUP</h1>
+      <><div className='flex flex-col items-center m-10'>
+        <h1 className='font-bold'>COUP</h1>
         <p>Waiting for lobby to start...</p>
+      </div>
       </>
     );
   } else {
     return (
-      <>
-        <h1 className='font-bold'>Coup</h1>
-        <form className="border-zinc-950"onSubmit={() => setSubmittedUsername(true)}>
+      <><div className='flex flex-col items-center m-10'>
+        <h1 className='font-bold'>COUP</h1>
+        <form className="border-zinc-950" onSubmit={() => setSubmittedUsername(true)}>
           <input className='border'
             onChange={(e) => setPlayerName(e.target.value)}></input>
         </form>
+      </div>
       </>
     );
   }
