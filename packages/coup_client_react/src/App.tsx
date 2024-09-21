@@ -88,9 +88,9 @@ function App() {
   } else {
     return (
       <>
-        <h1>COUP</h1>
-        <form onSubmit={() => setSubmittedUsername(true)}>
-          <input
+        <h1 className='font-bold'>Coup</h1>
+        <form className="border-zinc-950"onSubmit={() => setSubmittedUsername(true)}>
+          <input className='border'
             onChange={(e) => setPlayerName(e.target.value)}></input>
         </form>
       </>
