@@ -233,7 +233,8 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = gameState as AwaitingInfluenceExchange;
                 const [newL, newR] = gs.new_influences!;
                 if (playerInfluencesDiscarded[0] || playerInfluencesDiscarded[1]) {
-                    const oldInf = (oldL ?? oldR)!;
+                    const oldInfInx = playerInfluencesDiscarded[0] ? 1 : 0;
+                    const oldInf = handsState.this_player_influences[oldInfInx];
                     actions.push({
                         label: `Keep ${oldInf}`,
                         packet: {
@@ -251,7 +252,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                             action: {
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: mypid,
-                                swap_influence_with: [playerInfluencesDiscarded[0] ? 1 : 0, null],
+                                swap_influence_with: [oldInfInx, null],
                                 exchange_action: gs.exchange_action,
                             }
                         }
@@ -262,7 +263,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                             action: {
                                 action_type: "Choose Exchanged Influences",
                                 acting_player: mypid,
-                                swap_influence_with: [null, playerInfluencesDiscarded[0] ? 1 : 0],
+                                swap_influence_with: [null, oldInfInx],
                                 exchange_action: gs.exchange_action,
                             }
                         }
@@ -453,7 +454,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 credits={handsState.player_credits[mypid]}
                 influenceDiscarded={playerInfluencesDiscarded}
                 influences={handsState.this_player_influences}
-                name={usernames[mypid]}  
+                name={usernames[mypid]}
                 color = {colors[mypid]}
             >
 
