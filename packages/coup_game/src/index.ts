@@ -1,808 +1,822 @@
-import { Action, INFLUENCE_LIST, Influence, PlayerId, isTurnAction, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, isCounterAction, ClientGameState, AwaitingTurn, AwaitingInfluenceExchange, AwaitingForeignAidBlock, AwaitingTargetCounteraction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState, ActionType, ExchangeAction } from "coup_shared";
+import { Action, INFLUENCE_LIST, Influence, PlayerId, AssassinateAction, CoupAction, RevealChallengeResultAction, challengableActionInfluence, ClientGameState, AwaitingTurn, AwaitingInfluenceExchange, AwaitingTargetCounteraction, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, PlayerWon, ForeignAidAction, ChallengableAction, ChallengeAction, HandsState, ExchangeAction, TaxAction, CounterAction, StealAction, turnActionCounters, isCounterAction } from "coup_shared";
 import { isDeepStrictEqual } from "util";
 import assert from 'node:assert/strict';
 
 export class CoupGame {
-    private gameState: ServerGameState;
-
-    private deck: Influence[];
-
     readonly playerCount: number;
-
     readonly turnOrder: PlayerId[];
-    // An index in `turnOrder`
-    private currentPlayerInx: number;
 
-    private playerInfluences: [HeldInfluence, HeldInfluence][];
-    private playerCredits: number[];
+    private game: GameCoroutine | null;
+    private clientStates: ClientGameState[];
+    private clientHands: HandsState[];
 
-    constructor(turn_order: PlayerId[]) {
-        this.playerCount = turn_order.length;
+    constructor(turnOrder: PlayerId[]) {
+        this.playerCount = turnOrder.length;
 
         assert(3 <= this.playerCount && this.playerCount <= 6);
-        assert(this.playerCount === new Set(turn_order).size);
+        assert(this.playerCount === new Set(turnOrder).size);
 
-        this.turnOrder = turn_order;
-        this.currentPlayerInx = 0;
+        this.turnOrder = turnOrder;
 
-        this.deck = [];
-        for (const influence of INFLUENCE_LIST) {
-            for (let i = 0; i < 3; i++) {
-                this.deck.push(influence);
-            }
-        }
-        // Shuffle
-        for (let i = this.deck.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
-        }
-
-        this.playerInfluences = [];
-        this.playerCredits = [];
-        for (let i = 0; i < this.playerCount; i++) {
-            this.playerInfluences.push([{ influence: this.deck.pop()!, discarded: false }, { influence: this.deck.pop()!, discarded: false }]);
-            this.playerCredits.push(2);
-        }
-
-        this.gameState = {
-            state: "player_turn",
-            player: turn_order[this.currentPlayerInx],
-            turn_number: 1,
-        }
+        this.game = runGame(turnOrder);
+        const state = this.game.next().value as ServerGameState2;
+        this.clientStates = state.clientStates;
+        this.clientHands = state.clientHands;
     }
 
     // Returns if the action was valid
     makeAction(action: Action): boolean {
-        if (!this.actionIsValid(action)) {
+        if (this.game === null) {
             return false;
         }
-        this.receiveAction(action);
+        const next = this.game.next(action);
+        if (next.done) {
+            this.game = null;
+        }
+        const newStates = next.value;
+        if (newStates === undefined) {
+            return false;
+        }
+        this.clientStates = newStates.clientStates;
+        this.clientHands = newStates.clientHands;
         return true;
     }
 
     gameWinner(): PlayerId | null {
-        if (this.gameState.state === "game_over") {
-            return this.gameState.winning_player;
+        const clientState: ClientGameState = this.clientStates.entries().next().value![0];
+        if (clientState.state !== "game_over") {
+            return null;
         }
-        let remainingPlayers = [];
-        for (const playerId of this.turnOrder) {
-            if (!this.playerEliminated(playerId)) {
-                remainingPlayers.push(playerId);
-            }
-        }
-        if (remainingPlayers.length === 1) return remainingPlayers[0];
-        return null;
-    }
-
-    currentPlayer(): PlayerId {
-        return this.gameWinner() ?? this.turnOrder[this.currentPlayerInx];
+        return clientState.winning_player;
     }
 
     getHandsState(stateFor: PlayerId): HandsState {
-        return {
-            influences_discarded: this.playerInfluences.map(([i1, i2]) => [i1.discarded ? i1.influence : null, i2.discarded ? i2.influence : null]),
-            player_credits: this.playerCredits,
-            this_player_id: stateFor,
-            this_player_influences: this.playerInfluences[stateFor].map(i => i.influence) as [Influence, Influence],
-        };
+        return this.clientHands[stateFor];
     }
 
     getGameState(stateFor: PlayerId): ClientGameState {
-        switch (this.gameState.state) {
-            case "player_turn":
-            case "awaiting_action_target_counteraction":
-            case "awaiting_discard_influence":
-            case "game_over":
-                return this.gameState;
-            case "awaiting_influence_exchange":
-                this.gameState.new_influences
-                return {
-                    state: "awaiting_influence_exchange",
-                    exchange_action: this.gameState.exchange_action,
-                    new_influences: (stateFor === this.gameState.exchanging_player) ? this.gameState.new_influences : null,
-                };
-            case "awaiting_foreign_aid_block":
-                return {
-                    state: "awaiting_foreign_aid_block",
-                    foreign_aid_action: this.gameState.foreign_aid_action,
-                    player_passed: this.gameState.passed_players.includes(stateFor),
-                };
-            case "awaiting_challenge":
-                return {
-                    state: "awaiting_challenge",
-                    challengable_action: this.gameState.challengable_action,
-                    player_passed: this.gameState.passed_players.includes(stateFor),
-                };
-            case "awaiting_challenge_reveal":
-                return {
-                    state: "awaiting_challenge_reveal",
-                    challenge_action: this.gameState.challenge_action,
-                };
+        return this.clientStates[stateFor];
+    }
+}
+
+type ServerGameState2 = {
+    clientStates: ClientGameState[],
+    clientHands: HandsState[],
+};
+
+// Yields undefined for invalid game states, GameState while game is running, or winner id after game finishes
+type GameCoroutine = Generator<ServerGameState2 | undefined, ServerGameState2, Action>;
+
+// Yields null on invalid input
+function* runGame(turnOrder: PlayerId[]): GameCoroutine {
+    const deck: Influence[] = [];
+    for (const influence of INFLUENCE_LIST) {
+        for (let i = 0; i < 3; i++) {
+            deck.push(influence);
         }
     }
+    // Shuffle
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
 
-    // Checks if a player is able to attempt to take an action.
-    // This does not require a player to have to required influences, just that
-    // the player is not eliminated, the game state is the correct one for the
-    // action, and the targets (if any) are valid.
-    // By the time the action is executed, the action may no longer be valid.
-    // For example, an assassination will no longer be valid if the target was
-    // someone with one influence who challenged the assassination, and no longer
-    // has any influences once the assassination is attempted to be executed.
-    private actionIsValid(action: Action): boolean {
-        // TODO: Add bounds checks to indices?
-        // TODO: Add checks for the current turn
-        if (this.gameState.state === "game_over") {
-            return false;
-        }
-        if (action.action_type === "forfeit") {
-            return !this.playerEliminated(action.acting_player);
-        }
-        if (this.playerEliminated(action.acting_player)) {
-            return false;
-        }
-        if (
-            this.gameState.state === "player_turn"
-            && action.acting_player === this.gameState.player
-            && this.playerCredits[action.acting_player] >= 10
-        ) {
-            return action.action_type === "Coup"
-                && action.acting_player !== action.target_player
-                && !this.playerEliminated(action.target_player);
-        }
-        if (isTurnAction(action.action_type)) {
-            if (this.gameState.state !== "player_turn") {
-                return false;
+    const playerInfluences: [HeldInfluence, HeldInfluence][] = [];
+    const playerCredits: number[] = [];
+    for (const pid of turnOrder) {
+        playerInfluences.push([{ influence: deck.pop()!, discarded: false }, { influence: deck.pop()!, discarded: false }]);
+        playerCredits.push(2);
+    }
+
+    // The current player index gets incremented at the start of each turn, so
+    // it needs to start before the bounds when it first gets incremented
+    let currentPlayerIndex = -1;
+    let turnNumber = 0;
+    let winner = getWinner(playerInfluences);
+    while (winner === null) {
+        turnNumber++;
+        do {
+            currentPlayerIndex = (currentPlayerIndex + 1) % turnOrder.length;
+        } while (playerEliminated(turnOrder[currentPlayerIndex], playerInfluences));
+        const turnPlayer = turnOrder[currentPlayerIndex];
+
+        const awaitingTurnInputState: AwaitingTurn = {
+            state: "player_turn",
+            player: turnPlayer,
+            turn_number: turnNumber
+        };
+        let state: ServerGameState2 | undefined = {
+            clientHands: generateClientHands(playerInfluences, playerCredits),
+            clientStates: turnOrder.map((_) => awaitingTurnInputState),
+        };
+        getTurnInput: while (winner === null) {
+            const input = yield state;
+            state = undefined;
+
+            if (playerCredits[turnPlayer] >= 10) {
+                if (input.action_type !== "Coup" && input.action_type !== "forfeit") {
+                    continue getTurnInput;
+                }
             }
-            if (action.acting_player !== this.gameState.player) {
-                return false;
+            if (input.action_type !== "forfeit" && input.acting_player !== turnPlayer) {
+                continue getTurnInput;
             }
-        }
-        switch (action.action_type) {
-            case "Income":
-            case "Foreign Aid":
-            case "Tax":
-            case "Exchange":
-                return true;
-            case "Coup":
-                return action.acting_player !== action.target_player
-                    && !this.playerEliminated(action.target_player)
-                    && this.playerCredits[action.acting_player] >= 7;
-            case "Assassinate":
-                return action.acting_player !== action.target_player
-                    && !this.playerEliminated(action.target_player)
-                    && this.playerCredits[action.acting_player] >= 3;
-            case "Steal":
-                return action.acting_player !== action.target_player
-                    && !this.playerEliminated(action.target_player)
-                    && this.playerCredits[action.target_player] > 0;
-            case "Choose Exchanged Influences":
-                return this.gameState.state === "awaiting_influence_exchange"
-                    && action.acting_player === this.gameState.exchanging_player
-                    && (
-                        (action.swap_influence_with[0] ?? action.swap_influence_with[1] === null)
-                        || action.swap_influence_with[0] !== action.swap_influence_with[1]
-                    )
-                    && (
-                        action.swap_influence_with[0] === null
-                        || !this.playerInfluences[action.acting_player][action.swap_influence_with[0]].discarded
-                    )
-                    && (
-                        action.swap_influence_with[1] === null
-                        || !this.playerInfluences[action.acting_player][action.swap_influence_with[1]].discarded
+
+            switch (input.action_type) {
+                case "forfeit": {
+                    if (playerEliminated(input.acting_player, playerInfluences)) {
+                        continue getTurnInput;
+                    }
+
+                    const [i0, i1] = playerInfluences[input.acting_player];
+                    i0.discarded = true;
+                    i1.discarded = true;
+
+                    winner = getWinner(playerInfluences);
+                    if (winner !== null || input.acting_player === turnPlayer) {
+                        break getTurnInput;
+                    }
+
+                    state = {
+                        clientHands: generateClientHands(playerInfluences, playerCredits),
+                        clientStates: turnOrder.map((_) => awaitingTurnInputState),
+                    };
+
+                    continue getTurnInput;
+                }
+                case "Income": {
+                    playerCredits[turnPlayer]++;
+
+                    break getTurnInput;
+                }
+                case "Foreign Aid": {
+                    const foreignAidAction: ForeignAidAction = {
+                        action_type: "Foreign Aid",
+                        acting_player: turnPlayer,
+                        on_turn: awaitingTurnInputState,
+                    };
+
+                    let doForeignAid = true;
+                    let awaitingBlockFromPlayers = new Set(
+                        playerInfluences.map((_, pid) => pid)
+                            .filter(pid => pid !== turnPlayer && !playerEliminated(pid, playerInfluences))
                     );
-            case "Block Foreign Aid":
-                return this.gameState.state === "awaiting_foreign_aid_block"
-                    && action.acting_player !== this.gameState.foreign_aid_action.acting_player
-                    && !this.gameState.passed_players.includes(action.acting_player)
-                    && isDeepStrictEqual(action.blocked_action, this.gameState.foreign_aid_action);
-            case "Block Stealing with Captain": {
-                return this.gameState.state === "awaiting_action_target_counteraction"
-                    && this.gameState.targeted_action.action_type === "Steal"
-                    && action.acting_player === this.gameState.targeted_action.target_player
-                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
+                    getForeignAidBlock: while (awaitingBlockFromPlayers.size !== 0) {
+                        const blockForeignAidAction = yield* awaitForeignAidBlock(foreignAidAction, awaitingBlockFromPlayers, playerInfluences, playerCredits);
+                        winner = getWinner(playerInfluences);
+                        if (winner !== null || playerEliminated(turnPlayer, playerInfluences)) {
+                            doForeignAid = false;
+                            break getForeignAidBlock;
+                        }
+                        if (blockForeignAidAction === null) {
+                            break getForeignAidBlock;
+                        }
+
+                        const blockSuccessful = yield* handleActionChallenges(blockForeignAidAction, deck, playerInfluences, playerCredits);
+                        if (blockSuccessful) {
+                            doForeignAid = false;
+                            break getForeignAidBlock;
+                        }
+
+                        winner = getWinner(playerInfluences);
+                        if (winner !== null || playerEliminated(turnPlayer, playerInfluences)) {
+                            doForeignAid = false;
+                            break getForeignAidBlock;
+                        }
+
+                        awaitingBlockFromPlayers = awaitingBlockFromPlayers.difference(new Set(
+                            playerInfluences.map((_, pid) => pid).filter(pid => playerEliminated(pid, playerInfluences))
+                        ));
+                    }
+
+                    if (doForeignAid) {
+                        playerCredits[turnPlayer] += 2;
+                    }
+
+                    break getTurnInput;
+                }
+                case "Tax": {
+                    const taxAction: TaxAction = {
+                        action_type: "Tax",
+                        acting_player: turnPlayer,
+                        on_turn: awaitingTurnInputState,
+                    };
+                    const doAction = yield* handleActionChallenges(taxAction, deck, playerInfluences, playerCredits);
+                    if (doAction) {
+                        playerCredits[turnPlayer] += 3;
+                    }
+                    break getTurnInput;
+                }
+                case "Exchange": {
+                    const exchangeAction: ExchangeAction = {
+                        action_type: "Exchange",
+                        acting_player: turnPlayer,
+                        on_turn: awaitingTurnInputState,
+                    }
+                    const doAction = yield* handleActionChallenges(exchangeAction, deck, playerInfluences, playerCredits);
+                    if (doAction) {
+                        yield* awaitExchangeCards(exchangeAction, deck, playerInfluences, playerCredits);
+                    }
+                    break getTurnInput;
+                }
+                case "Coup": {
+                    if (playerEliminated(input.target_player, playerInfluences)) {
+                        continue getTurnInput;
+                    }
+                    if (input.target_player === turnPlayer) {
+                        continue getTurnInput;
+                    }
+                    if (playerCredits[turnPlayer] < 7) {
+                        continue getTurnInput;
+                    }
+
+                    playerCredits[turnPlayer] -= 7;
+                    const coupAction: CoupAction = {
+                        action_type: "Coup",
+                        acting_player: turnPlayer,
+                        target_player: input.target_player,
+                        on_turn: awaitingTurnInputState,
+                    };
+                    yield* awaitDiscard(coupAction, playerInfluences, playerCredits);
+                    break getTurnInput;
+                }
+                case "Assassinate": {
+                    if (playerEliminated(input.target_player, playerInfluences)) {
+                        continue getTurnInput;
+                    }
+                    if (input.target_player === turnPlayer) {
+                        continue getTurnInput;
+                    }
+                    if (playerCredits[turnPlayer] < 3) {
+                        continue getTurnInput;
+                    }
+
+                    playerCredits[turnPlayer] -= 3;
+                    const assassinateAction: AssassinateAction = {
+                        action_type: "Assassinate",
+                        acting_player: turnPlayer,
+                        target_player: input.target_player,
+                        on_turn: awaitingTurnInputState,
+                    };
+
+                    const assassinateUnchallenged = yield* handleActionChallenges(assassinateAction, deck, playerInfluences, playerCredits);
+
+                    if (!assassinateUnchallenged) {
+                        break getTurnInput;
+                    }
+                    winner = getWinner(playerInfluences);
+                    if (winner !== null) {
+                        break getTurnInput;
+                    }
+                    if (playerEliminated(input.target_player, playerInfluences)) {
+                        break getTurnInput;
+                    }
+
+                    const assassinateUnblocked = yield* awaitTargetBlocked(assassinateAction, deck, playerInfluences, playerCredits);
+
+                    if (!assassinateUnblocked) {
+                        break getTurnInput;
+                    }
+                    winner = getWinner(playerInfluences);
+                    if (winner !== null) {
+                        break getTurnInput;
+                    }
+                    if (playerEliminated(input.target_player, playerInfluences)) {
+                        break getTurnInput;
+                    }
+
+                    yield* awaitDiscard(assassinateAction, playerInfluences, playerCredits);
+
+                    break getTurnInput;
+                }
+                case "Steal": {
+                    if (playerEliminated(input.target_player, playerInfluences)) {
+                        continue getTurnInput;
+                    }
+                    if (input.target_player === turnPlayer) {
+                        continue getTurnInput;
+                    }
+                    if (playerCredits[input.target_player] <= 0) {
+                        continue getTurnInput;
+                    }
+
+                    const stealAction: StealAction = {
+                        action_type: "Steal",
+                        acting_player: turnPlayer,
+                        target_player: input.target_player,
+                        on_turn: awaitingTurnInputState,
+                    };
+
+                    const stealUnchallenged = yield* handleActionChallenges(stealAction, deck, playerInfluences, playerCredits);
+
+                    if (!stealUnchallenged) {
+                        break getTurnInput;
+                    }
+                    winner = getWinner(playerInfluences);
+                    if (winner !== null) {
+                        break getTurnInput;
+                    }
+
+                    const stealUnblocked = yield* awaitTargetBlocked(stealAction, deck, playerInfluences, playerCredits);
+
+                    if (!stealUnblocked) {
+                        break getTurnInput;
+                    }
+                    winner = getWinner(playerInfluences);
+                    if (winner !== null) {
+                        break getTurnInput;
+                    }
+
+                    const stolen = Math.min(2, playerCredits[input.target_player]);
+                    playerCredits[input.target_player] -= stolen;
+                    playerCredits[turnPlayer] += stolen;
+
+                    break getTurnInput;
+                }
+                default: {
+                    continue getTurnInput;
+                }
             }
-            case "Block Stealing with Ambassador": {
-                return this.gameState.state === "awaiting_action_target_counteraction"
-                    && this.gameState.targeted_action.action_type === "Steal"
-                    && action.acting_player === this.gameState.targeted_action.target_player
-                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
+        }
+
+        winner = getWinner(playerInfluences);
+    }
+
+    const gameOverState: PlayerWon = {
+        state: "game_over",
+        winning_player: winner,
+    }
+    return {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: turnOrder.map((_) => gameOverState),
+    };
+}
+
+/** @returns whether the action should be performed */
+function* handleActionChallenges(challengableAction: ChallengableAction, deck: Influence[], playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): Generator<ServerGameState2 | undefined, boolean, Action> {
+    const attemptingToActPlayer = challengableAction.acting_player;
+
+    const awaitingChallengesFromPlayers = new Set(
+        playerInfluences.map((_, pid) => pid)
+            .filter(pid => pid !== attemptingToActPlayer && !playerEliminated(pid, playerInfluences))
+    );
+
+    let state: ServerGameState2 | undefined = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map((_, pid) => ({
+            state: "awaiting_challenge",
+            challengable_action: challengableAction,
+            player_passed: !awaitingChallengesFromPlayers.has(pid)
+        })),
+    };
+
+    let challengeAction: ChallengeAction | null = null;
+    getPlayerChallenge: while (challengeAction === null && awaitingChallengesFromPlayers.size !== 0) {
+        const input = yield state;
+        state = undefined;
+
+        s: switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue getPlayerChallenge;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === attemptingToActPlayer) {
+                    return false;
+                }
+
+                awaitingChallengesFromPlayers.delete(input.acting_player);
+
+                break s;
             }
-            case "Block Assassination": {
-                return this.gameState.state === "awaiting_action_target_counteraction"
-                    && this.gameState.targeted_action.action_type === "Assassinate"
-                    && action.acting_player === this.gameState.targeted_action.target_player
-                    && isDeepStrictEqual(action.blocked_action, this.gameState.targeted_action);
-            }
-            case "Challenge":
-                return this.gameState.state === "awaiting_challenge"
-                    && isDeepStrictEqual(action.challenged_action, this.gameState.challengable_action);
-            case "Reveal Challenge Result":
-                return this.gameState.state === "awaiting_challenge_reveal"
-                    && action.acting_player === this.gameState.challenge_action.challenged_action.acting_player
-                    && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
-                    && isDeepStrictEqual(action.challenge_action, this.gameState.challenge_action);
-            case "Discard Influence":
-                return this.gameState.state === "awaiting_discard_influence"
-                    && !this.playerInfluences[action.acting_player][action.influence_index].discarded
-                    && (
-                        (
-                            this.gameState.causing_action.action_type === "Reveal Challenge Result"
-                            && action.acting_player === this.gameState.causing_action.challenge_action.acting_player
-                        )
-                        || (
-                            (
-                                this.gameState.causing_action.action_type === "Assassinate"
-                                || this.gameState.causing_action.action_type === "Coup"
-                            )
-                            && action.acting_player === this.gameState.causing_action.target_player
-                        )
-                    )
-                    && isDeepStrictEqual(action.causing_action, this.gameState.causing_action);
             case "Pass": {
-                switch (this.gameState.state) {
-                    case "awaiting_challenge":
-                        return action.acting_player !== this.gameState.challengable_action.acting_player
-                            && !this.gameState.passed_players.includes(action.acting_player)
-                            && isDeepStrictEqual(action.pass_on_action, this.gameState.challengable_action);
-                    case "awaiting_foreign_aid_block":
-                        return action.acting_player !== this.gameState.foreign_aid_action.acting_player
-                            && !this.gameState.passed_players.includes(action.acting_player)
-                            && isDeepStrictEqual(action.pass_on_action, this.gameState.foreign_aid_action);
-                    case "awaiting_action_target_counteraction":
-                        return action.acting_player === this.gameState.targeted_action.target_player
-                            && isDeepStrictEqual(action.pass_on_action, this.gameState.targeted_action);
+                const removed = awaitingChallengesFromPlayers.delete(input.acting_player);
+                if (!removed) {
+                    continue getPlayerChallenge;
                 }
-                return false;
-            }
-            default:
-                const _exhaustive_check: never = action;
-                throw new Error(_exhaustive_check);
-        }
-    }
-
-    // Receives a (valid) action from a client.
-    // If it is not blockable or challengable, it is handled immediately.
-    // Otherwise, the game state changes to wait for a block/challenge instead,
-    // and the action may or may not be handled in the future.
-    private receiveAction(action: Action) {
-        switch (action.action_type) {
-            case "Income":
-            case "Coup":
-            case "Challenge":
-            case "Pass":
-            case "Reveal Challenge Result":
-            case "forfeit":
-            case "Choose Exchanged Influences":
-            case "Discard Influence":
-                // Unblockable/unchallengable
-                this.handleAction(action);
-                break;
-            case "Foreign Aid":
-                // Blockable by everyone
-                this.gameState = {
-                    state: "awaiting_foreign_aid_block",
-                    foreign_aid_action: action,
-                    passed_players: [],
-                };
-                break;
-            case "Exchange":
-            case "Tax":
-            case "Block Stealing with Captain":
-            case "Block Stealing with Ambassador":
-            case "Block Assassination":
-            case "Assassinate":
-            case "Steal":
-                // Challengable
-                this.gameState = {
-                    state: "awaiting_challenge",
-                    challengable_action: action,
-                    passed_players: [],
-                    foreign_aid_passes: [],
-                };
-                break;
-            case "Block Foreign Aid":
-                assert(this.gameState.state === "awaiting_foreign_aid_block");
-                this.gameState = {
-                    state: "awaiting_challenge",
-                    challengable_action: action,
-                    passed_players: [],
-                    foreign_aid_passes: this.gameState.passed_players,
-                };
-                break;
-            default:
-                const _exhaustive_check: never = action;
-        }
-    }
-
-    // Handles a turn action. A turn action can be invalid (for example, if an
-    // assassination is being handled immediately after handling a failed
-    // challenge that eliminated the target).
-    // Game end checks should take place after an influence can be eliminated.
-    // The next turn should be set everyplace a turn action's effects are
-    // applied (or fail to apply) if the game isn't won yet.
-    // Handling counterable and challengable actions should put the game in the
-    // right state to handle counters/challenges, and the effects should be
-    // applied.
-    private handleAction(action: Action) {
-        if (this.gameState.state === "game_over") {
-            return;
-        }
-        switch (action.action_type) {
-            case "Income": {
-                assert(
-                    this.gameState.state === "player_turn"
-                    && action.acting_player === this.gameState.player
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.playerCredits[action.acting_player] += 1;
-                this.setNextTurn();
-                return;
-            }
-            case "Foreign Aid": {
-                assert(
-                    this.gameState.state === "player_turn"
-                    && action.acting_player === this.gameState.player
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.playerCredits[action.acting_player] += 2;
-                this.setNextTurn();
-                return;
-            }
-            case "Tax": {
-                assert(
-                    this.gameState.state === "player_turn"
-                    && action.acting_player === this.gameState.player
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.playerCredits[action.acting_player] += 3;
-                this.setNextTurn();
-                return;
-            }
-            case "Exchange": {
-                assert(
-                    this.gameState.state === "player_turn"
-                    && action.acting_player === this.gameState.player
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.gameState = {
-                    state: "awaiting_influence_exchange",
-                    exchanging_player: action.acting_player,
-                    exchange_action: action,
-                    new_influences: [this.deck.pop()!, this.deck.pop()!],
-                };
-                return;
-            }
-            case "Choose Exchanged Influences": {
-                assert(
-                    this.gameState.state === "awaiting_influence_exchange"
-                    && action.acting_player === this.gameState.exchanging_player
-                    && !this.playerEliminated(action.acting_player)
-                );
-                const p = action.acting_player;
-                if (action.swap_influence_with[0] !== null) {
-                    const i = action.swap_influence_with[0];
-                    [this.playerInfluences[p][i].influence, this.gameState.new_influences[0]] = [this.gameState.new_influences[0], this.playerInfluences[p][i].influence];
-                }
-                if (action.swap_influence_with[1] !== null) {
-                    const i = action.swap_influence_with[1];
-                    [this.playerInfluences[p][i].influence, this.gameState.new_influences[1]] = [this.gameState.new_influences[1], this.playerInfluences[p][i].influence];
-                }
-
-                // Shuffle influences back in
-                this.deck.splice(0, 0, this.gameState.new_influences[0]);
-                this.deck.splice(0, 0, this.gameState.new_influences[1]);
-
-                this.gameState = this.gameState.exchange_action.on_turn;
-                this.setNextTurn();
-                return;
-            }
-            case "Coup": {
-                if (
-                    this.gameState.state !== "player_turn"
-                    || action.acting_player !== this.gameState.player
-                    || this.playerCredits[action.acting_player] < 7
-                ) {
-                    return;
-                }
-                this.playerCredits[action.acting_player] -= 7;
-                const stateChanged = this.handleLoseInfluence(action.target_player, action);
-                if (!stateChanged) {
-                    this.setNextTurn();
-                }
-                return;
-            }
-            case "Assassinate": {
-                if (
-                    this.gameState.state !== "player_turn"
-                    || action.acting_player !== this.gameState.player
-                    || this.playerCredits[action.acting_player] < 3
-                ) {
-                    return;
-                }
-                this.playerCredits[action.acting_player] -= 3;
-                const stateChanged = this.handleLoseInfluence(action.target_player, action);
-                if (!stateChanged) {
-                    this.setNextTurn();
-                }
-                return;
-            }
-            case "Steal": {
-                if (
-                    this.gameState.state !== "player_turn"
-                    || action.acting_player !== this.gameState.player
-                ) {
-                    return;
-                }
-                // When a steal is attempted by the client, the target can not
-                // be eliminated. The target is allowed to be eliminated as a
-                // result of a failed challenge by the time the steal is handled
-                // though.
-                const credits = Math.min(this.playerCredits[action.target_player], 2)
-                this.playerCredits[action.target_player] -= credits;
-                this.playerCredits[action.acting_player] += credits;
-
-                this.setNextTurn();
-                return;
-            }
-            case "Block Foreign Aid": {
-                assert(
-                    this.gameState.state === "awaiting_foreign_aid_block"
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.setNextTurn();
-                return;
-            }
-            case "Block Stealing with Captain":
-            case "Block Stealing with Ambassador": {
-                assert(
-                    this.gameState.state === "awaiting_action_target_counteraction"
-                    && this.gameState.targeted_action.action_type === "Steal"
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.gameState = this.gameState.targeted_action.on_turn;
-                this.setNextTurn();
-                return;
-            }
-            case "Block Assassination": {
-                assert(
-                    this.gameState.state === "awaiting_action_target_counteraction"
-                    && this.gameState.targeted_action.action_type === "Assassinate"
-                    && !this.playerEliminated(action.acting_player)
-                );
-                this.gameState = this.gameState.targeted_action.on_turn;
-                this.setNextTurn();
-                return;
+                break s;
             }
             case "Challenge": {
-                assert(
-                    this.gameState.state === "awaiting_challenge"
-                    && action.acting_player !== this.gameState.challengable_action.acting_player
-                );
-                this.gameState = {
-                    state: "awaiting_challenge_reveal",
-                    challenge_action: action,
-                    foreign_aid_passes: this.gameState.foreign_aid_passes,
+                if (!awaitingChallengesFromPlayers.has(input.acting_player)) {
+                    continue getPlayerChallenge;
                 }
-                return;
-            }
-            case "Reveal Challenge Result": {
-                assert(
-                    this.gameState.state === "awaiting_challenge_reveal"
-                    && action.acting_player === this.gameState.challenge_action.challenged_action.acting_player
-                    && !this.playerInfluences[action.acting_player][action.revealed_influence_index].discarded
-                );
-                const challengedAction = action.challenge_action.challenged_action;
-                const revealedInfluence = this.playerInfluences[action.acting_player][action.revealed_influence_index].influence;
-                const correctInfluence = challengableActionInfluence(challengedAction.action_type) === revealedInfluence;
-                if (correctInfluence) {
-                    const stateChanged = this.handleLoseInfluence(action.challenge_action.acting_player, action);
-                    if (stateChanged) {
-                        return;
-                    }
-
-                    // Swap revealed influence for a new one
-                    this.deck.splice(0, 0, revealedInfluence);
-                    this.playerInfluences[action.acting_player][action.revealed_influence_index].influence = this.deck.pop()!;
-
-                    this.resumeHandlingChallengedAction(challengedAction);
-                    return;
-                } else {
-                    // Action successfully challenged
-                    this.handleLoseInfluence(action.acting_player, action);
-
-                    switch (challengedAction.action_type) {
-                        // Stop handling the successfully challenged action
-                        case "Block Foreign Aid": {
-                            const foreignAidBlockPasses = [...this.gameState.foreign_aid_passes, action.challenge_action.acting_player];
-                            if (!this.allPlayersPassed(challengedAction.acting_player, foreignAidBlockPasses)) {
-                                this.gameState = {
-                                    state: "awaiting_foreign_aid_block",
-                                    foreign_aid_action: challengedAction.blocked_action,
-                                    passed_players: foreignAidBlockPasses,
-                                };
-                            }
-                            return;
-                        }
-                        case "Block Stealing with Captain":
-                        case "Block Stealing with Ambassador":
-                        case "Block Assassination": {
-                            this.gameState = challengedAction.blocked_action.on_turn;
-                            this.handleAction(challengedAction.blocked_action);
-                            return;
-                        }
-                        case "Assassinate":
-                        case "Steal":
-                        case "Tax":
-                        case "Exchange": {
-                            this.gameState = challengedAction.on_turn;
-                            this.setNextTurn();
-                            return;
-                        }
-                        default: {
-                            const _exhaustive_check: never = challengedAction;
-                            throw new Error(_exhaustive_check);
-                        }
-                    }
+                if (!isDeepStrictEqual(input.challenged_action, challengableAction)) {
+                    continue getPlayerChallenge;
                 }
-            }
-            case "Discard Influence": {
-                assert(this.gameState.state === "awaiting_discard_influence");
-                assert(!this.playerInfluences[action.acting_player][action.influence_index].discarded);
-                this.playerInfluences[action.acting_player][action.influence_index].discarded = true;
-                const winner = this.gameWinner();
-                if (winner !== null) {
-                    this.gameState = {
-                        state: "game_over",
-                        winning_player: winner,
-                    };
-                    return;
-                }
-                switch (action.causing_action.action_type) {
-                    case "Coup":
-                    case "Assassinate":
-                        this.gameState = action.causing_action.on_turn
-                        this.setNextTurn();
-                        return;
-                    case "Reveal Challenge Result": {
-                        this.resumeHandlingChallengedAction(action.causing_action.challenge_action.challenged_action);
-                        return;
-                    }
-                    default: {
-                        const _exhaustive_check: never = action.causing_action;
-                        throw new Error(_exhaustive_check);
-                    }
-                }
-            }
-            case "forfeit": {
-                throw "todo";
-                break;
-            }
-            case "Pass": {
-                switch (this.gameState.state) {
-                    case "awaiting_action_target_counteraction": {
-                        assert(action.acting_player === this.gameState.targeted_action.target_player);
-                        const targetedAction = this.gameState.targeted_action;
-                        this.gameState = targetedAction.on_turn;
-                        this.handleAction(targetedAction);
-                        return;
-                    }
-                    case "awaiting_foreign_aid_block": {
-                        assert(action.acting_player !== this.gameState.foreign_aid_action.acting_player);
-                        assert(!this.gameState.passed_players.includes(action.acting_player));
-                        const foreignAidAction = this.gameState.foreign_aid_action;
-                        this.gameState.passed_players.push(action.acting_player);
-                        if (!this.allPlayersPassed(action.pass_on_action.acting_player, this.gameState.passed_players)) {
-                            return;
-                        }
-                        this.gameState = foreignAidAction.on_turn;
-                        this.handleAction(foreignAidAction);
-                        return;
-                    }
-                    case "awaiting_challenge": {
-                        assert(action.acting_player !== this.gameState.challengable_action.acting_player);
-                        assert(!this.gameState.passed_players.includes(action.acting_player));
-                        this.gameState.passed_players.push(action.acting_player);
-                        if (!this.allPlayersPassed(action.pass_on_action.acting_player, this.gameState.passed_players)) {
-                            return;
-                        }
-                        const challengableAction = this.gameState.challengable_action;
-                        switch (challengableAction.action_type) {
-                            case "Block Foreign Aid":
-                            case "Block Stealing with Captain":
-                            case "Block Stealing with Ambassador":
-                            case "Block Assassination": {
-                                // FIXME: handleAction will never get run for these 4 action types?
-                                this.gameState = challengableAction.blocked_action.on_turn;
-                                this.setNextTurn();
-                                return;
-                            }
-                            case "Tax":
-                            case "Exchange": {
-                                this.gameState = challengableAction.on_turn;
-                                this.handleAction(challengableAction);
-                                return;
-                            }
-                            case "Assassinate":
-                            case "Steal": {
-                                this.gameState = {
-                                    state: "awaiting_action_target_counteraction",
-                                    targeted_action: challengableAction,
-                                };
-                                return;
-                            }
-                        }
-                    }
-                    case "player_turn":
-                    case "awaiting_influence_exchange":
-                    case "awaiting_challenge_reveal":
-                    case "awaiting_discard_influence":
-                        throw new Error(`can not pass during state ${this.gameState.state}`);
-                }
-            }
-            default:
-                const _exhaustive_check: never = action;
-                throw new Error(_exhaustive_check);
-        }
-    }
-
-    resumeHandlingChallengedAction(challengedAction: ChallengableAction) {
-        switch (challengedAction.action_type) {
-            case "Tax":
-            case "Exchange": {
-                this.gameState = challengedAction.on_turn;
-                this.handleAction(challengedAction);
-                return;
-            }
-            case "Assassinate":
-            case "Steal": {
-                this.gameState = {
-                    state: "awaiting_action_target_counteraction",
-                    targeted_action: challengedAction,
-                }
-                return;
-            }
-            case "Block Foreign Aid":
-            case "Block Stealing with Captain":
-            case "Block Stealing with Ambassador":
-            case "Block Assassination": {
-                this.gameState = challengedAction.blocked_action.on_turn;
-                this.setNextTurn();
-                return;
+                challengeAction = input;
+                break getPlayerChallenge;
             }
             default: {
-                const _exhaustive_check: never = challengedAction;
-                throw new Error(_exhaustive_check);
+                continue getPlayerChallenge;
+            }
+        }
+
+        state = {
+            clientHands: generateClientHands(playerInfluences, playerCredits),
+            clientStates: playerInfluences.map((_, pid) => ({
+                state: "awaiting_challenge",
+                challengable_action: challengableAction,
+                player_passed: !awaitingChallengesFromPlayers.has(pid)
+            })),
+        }
+    }
+    if (challengeAction === null) {
+        return true;
+    }
+
+    const challengingPlayer = challengeAction.acting_player;
+    const awaitingChallengeRevealState: AwaitingChallengeResultReveal = {
+        state: "awaiting_challenge_reveal",
+        challenge_action: challengeAction,
+    };
+    state = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map(_ => awaitingChallengeRevealState),
+    };
+    let revealedInfluenceAction: RevealChallengeResultAction | null = null;
+    getRevealedInfluence: while (revealedInfluenceAction === null) {
+        const input = yield state;
+        state = undefined;
+
+        switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue getRevealedInfluence;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === attemptingToActPlayer) {
+                    return false;
+                }
+
+                state = {
+                    clientHands: generateClientHands(playerInfluences, playerCredits),
+                    clientStates: playerInfluences.map(_ => awaitingChallengeRevealState),
+                };
+                continue getRevealedInfluence;
+            }
+            case "Reveal Challenge Result": {
+                if (input.acting_player !== attemptingToActPlayer) {
+                    continue getRevealedInfluence;
+                }
+                if (!isDeepStrictEqual(input.challenge_action, challengeAction)) {
+                    continue getRevealedInfluence;
+                }
+                if (playerInfluences[attemptingToActPlayer][input.revealed_influence_index].discarded) {
+                    continue getRevealedInfluence;
+                }
+
+                revealedInfluenceAction = input;
+                break getRevealedInfluence;
+            }
+            default: {
+                continue getRevealedInfluence;
             }
         }
     }
 
-    // Returns whether the game state changed while handling the lost influence
-    private handleLoseInfluence(target: PlayerId, causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction): boolean {
-        if (
-            causing_action.action_type === "Reveal Challenge Result"
-            && target === causing_action.challenge_action.challenged_action.acting_player
-        ) {
-            const discardInx = causing_action.revealed_influence_index;
-            assert(!this.playerInfluences[target][discardInx].discarded);
-            this.playerInfluences[target][discardInx].discarded = true;
-        } else {
-            if (!this.playerInfluences[target][0].discarded && !this.playerInfluences[target][1].discarded) {
-                this.gameState = {
-                    state: "awaiting_discard_influence",
-                    causing_action: causing_action,
-                    foreign_aid_passes: (
-                        this.gameState.state !== "awaiting_challenge"
-                        && this.gameState.state !== "awaiting_challenge_reveal"
-                        && this.gameState.state !== "awaiting_discard_influence"
-                    ) ? [] : this.gameState.foreign_aid_passes,
-                };
-                return true;
-            }
-            if (this.playerEliminated(target)) {
-                return false;
-            }
-            if (this.playerInfluences[target][0].discarded) {
-                this.playerInfluences[target][1].discarded = true;
-            } else {
-                this.playerInfluences[target][0].discarded = true;
-            }
-        }
-        const winner = this.gameWinner();
-        if (winner !== null) {
-            this.gameState = {
-                state: "game_over",
-                winning_player: winner,
-            };
-            return true;
-        }
+    const correctActionInfluence = challengableActionInfluence(challengableAction.action_type);
+    const revealedInfluenceType = playerInfluences[attemptingToActPlayer][revealedInfluenceAction.revealed_influence_index].influence;
+    if (correctActionInfluence !== revealedInfluenceType) {
+        playerInfluences[attemptingToActPlayer][revealedInfluenceAction.revealed_influence_index].discarded = true;
         return false;
     }
 
-    private setNextTurn() {
-        const winner = this.gameWinner();
-        if (winner !== null) {
-            this.gameState = {
-                state: "game_over",
-                winning_player: winner,
-            };
-            return;
-        }
-        // Make sure the code before this properly handled all pending actions,
-        // unwrapping state all the way back down to "player_turn"
-        assert(this.gameState.state === "player_turn");
-        do {
-            this.currentPlayerInx = (this.currentPlayerInx + 1) % this.playerCount;
-        } while (this.playerEliminated(this.currentPlayer()));
-        this.gameState = {
-            state: "player_turn",
-            player: this.currentPlayer(),
-            turn_number: this.gameState.turn_number + 1,
-        };
+    // Challenge failed
+    deck.splice(0, 0, revealedInfluenceType);
+    playerInfluences[attemptingToActPlayer][revealedInfluenceAction.revealed_influence_index].influence = deck.pop()!;
+
+    yield* awaitDiscard(revealedInfluenceAction, playerInfluences, playerCredits);
+
+    return !playerEliminated(attemptingToActPlayer, playerInfluences);
+}
+
+function* awaitDiscard(causingAction: CoupAction | AssassinateAction | RevealChallengeResultAction, playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): Generator<ServerGameState2 | undefined, undefined, Action> {
+    const discardingPlayer = causingAction.action_type === "Reveal Challenge Result" ? causingAction.challenge_action.acting_player : causingAction.target_player;
+
+    if (playerInfluences[discardingPlayer][0].discarded || playerInfluences[discardingPlayer][1].discarded) {
+        playerInfluences[discardingPlayer][0].discarded = true;
+        playerInfluences[discardingPlayer][1].discarded = true;
+        return;
     }
 
-    private playerEliminated(player: PlayerId): boolean {
-        return this.playerInfluences[player][0].discarded && this.playerInfluences[player][1].discarded;
-    }
+    const awaitingDiscardInfluenceState: AwaitingDiscardInfluence = {
+        state: "awaiting_discard_influence",
+        causing_action: causingAction,
+    };
 
-    private allPlayersPassed(foreignAidActor: PlayerId, passes: PlayerId[]) {
-        for (let p = 0; p < this.playerCount; p++) {
-            if (
-                !this.playerEliminated(p)
-                && p !== foreignAidActor
-                && !passes.includes(p)
-            ) {
-                return false;
+    let state: ServerGameState2 | undefined = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map(_ => awaitingDiscardInfluenceState),
+    };
+    getDiscardedInfluence: while (!playerEliminated(discardingPlayer, playerInfluences)) {
+        const input = yield state;
+        state = undefined;
+
+        switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue getDiscardedInfluence;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === discardingPlayer) {
+                    return;
+                }
+
+                state = {
+                    clientHands: generateClientHands(playerInfluences, playerCredits),
+                    clientStates: playerInfluences.map(_ => awaitingDiscardInfluenceState),
+                };
+                continue getDiscardedInfluence;
+            }
+            case "Discard Influence": {
+                if (input.acting_player !== discardingPlayer) {
+                    continue getDiscardedInfluence;
+                }
+                if (!isDeepStrictEqual(input.causing_action, causingAction)) {
+                    continue getDiscardedInfluence;
+                }
+                if (playerInfluences[discardingPlayer][input.influence_index].discarded) {
+                    continue getDiscardedInfluence;
+                }
+
+                playerInfluences[discardingPlayer][input.influence_index].discarded = true;
+
+                return;
+            }
+            default: {
+                continue getDiscardedInfluence;
             }
         }
-        return true;
     }
 }
 
-type ServerGameState =
-    AwaitingTurn
-    | ServerAwaitingInfluenceExchange
-    | ServerAwaitingForeignAidBlock
-    | AwaitingTargetCounteraction
-    | ServerAwaitingActionChallenge
-    | ServerAwaitingChallengeResultReveal
-    | ServerAwaitingDiscardInfluence
-    | PlayerWon;
+function* awaitForeignAidBlock(foreignAidAction: ForeignAidAction, awaitingBlockFromPlayers: Set<PlayerId>, playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): Generator<ServerGameState2 | undefined, CounterAction | null, Action> {
+    const attemptingToForeignAid: PlayerId = foreignAidAction.acting_player;
 
-type ServerAwaitingInfluenceExchange = {
-    state: "awaiting_influence_exchange",
-    exchanging_player: PlayerId,
-    exchange_action: ExchangeAction,
-    new_influences: [Influence, Influence],
+    let state: ServerGameState2 | undefined = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map((_, pid) => ({
+            state: "awaiting_foreign_aid_block",
+            foreign_aid_action: foreignAidAction,
+            player_passed: !awaitingBlockFromPlayers.has(pid)
+        })),
+    };
+
+    getBlock: while (awaitingBlockFromPlayers.size !== 0) {
+        const input = yield state;
+        state = undefined;
+
+        s: switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue getBlock;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === attemptingToForeignAid) {
+                    return null;
+                }
+
+                awaitingBlockFromPlayers.delete(input.acting_player);
+                break s;
+            }
+            case "Pass": {
+                const removed = awaitingBlockFromPlayers.delete(input.acting_player);
+                if (!removed) {
+                    continue getBlock;
+                }
+                break s;
+            }
+            case "Block Foreign Aid": {
+                if (!awaitingBlockFromPlayers.has(input.acting_player)) {
+                    continue getBlock;
+                }
+                if (!isDeepStrictEqual(input.blocked_action, foreignAidAction)) {
+                    continue getBlock;
+                }
+                awaitingBlockFromPlayers.delete(input.acting_player);
+                return input;
+            }
+            default: {
+                continue getBlock;
+            }
+        }
+
+        state = {
+            clientHands: generateClientHands(playerInfluences, playerCredits),
+            clientStates: playerInfluences.map((_, pid) => ({
+                state: "awaiting_foreign_aid_block",
+                foreign_aid_action: foreignAidAction,
+                player_passed: !awaitingBlockFromPlayers.has(pid)
+            })),
+        };
+    }
+    return null;
 }
 
-type ServerAwaitingForeignAidBlock = {
-    state: "awaiting_foreign_aid_block",
-    foreign_aid_action: ForeignAidAction,
-    passed_players: PlayerId[],
+function* awaitExchangeCards(exchangeAction: ExchangeAction, deck: Influence[], playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): Generator<ServerGameState2 | undefined, undefined, Action> {
+    const exchangingPlayer = exchangeAction.acting_player;
+
+    let drawnInf: [Influence, Influence];
+    {
+        const newInf0 = deck.pop()!;
+        const newInf1 = deck.pop()!;
+        drawnInf = [newInf0, newInf1];
+    }
+
+    let state: ServerGameState2 | undefined = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map((_, pid) => ({
+            state: "awaiting_influence_exchange",
+            exchange_action: exchangeAction,
+            new_influences: pid === exchangingPlayer ? drawnInf : null,
+        })),
+    };
+
+    doExchange: while (true) {
+        const input: Action = yield state;
+        state = undefined;
+
+        switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue doExchange;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === exchangingPlayer) {
+                    break doExchange;
+                }
+
+                state = {
+                    clientHands: generateClientHands(playerInfluences, playerCredits),
+                    clientStates: playerInfluences.map((_, pid): AwaitingInfluenceExchange => ({
+                        state: "awaiting_influence_exchange",
+                        exchange_action: exchangeAction,
+                        new_influences: pid === exchangingPlayer ? drawnInf : null,
+                    })),
+                };
+                continue doExchange;
+            }
+            case "Choose Exchanged Influences": {
+                if (input.acting_player !== exchangingPlayer) {
+                    continue doExchange;
+                }
+                const [swap0, swap1] = input.swap_influence_with;
+                if (swap0 !== null && playerInfluences[exchangingPlayer][swap0].discarded) {
+                    continue doExchange;
+                }
+                if (swap1 !== null && playerInfluences[exchangingPlayer][swap1].discarded) {
+                    continue doExchange;
+                }
+                if (swap0 !== null && swap1 !== null && swap0 === swap1) {
+                    continue doExchange;
+                }
+                if (!isDeepStrictEqual(input.exchange_action, exchangeAction)) {
+                    continue;
+                }
+
+                if (swap0 !== null) {
+                    [drawnInf[0], playerInfluences[exchangingPlayer][swap0].influence] = [playerInfluences[exchangingPlayer][swap0].influence, drawnInf[0]];
+                }
+                if (swap1 !== null) {
+                    [drawnInf[1], playerInfluences[exchangingPlayer][swap1].influence] = [playerInfluences[exchangingPlayer][swap1].influence, drawnInf[1]];
+                }
+
+                break doExchange;
+            }
+        }
+    }
+
+    deck.splice(0, 0, ...drawnInf);
 }
 
-// TODO: Factor out waiting for a challenge against blocking foreign aid?
-type ServerAwaitingActionChallenge = {
-    state: "awaiting_challenge",
-    challengable_action: ChallengableAction,
-    passed_players: PlayerId[],
-    foreign_aid_passes: PlayerId[],
-};
+/** @returns whether the action should be performed */
+function* awaitTargetBlocked(counterableAction: AssassinateAction | StealAction, deck: Influence[], playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): Generator<ServerGameState2 | undefined, boolean, Action> {
+    const targetPlayer = counterableAction.target_player;
+    const awaitingTargetCounteractionState: AwaitingTargetCounteraction = {
+        state: "awaiting_action_target_counteraction",
+        targeted_action: counterableAction,
+    };
+    const validCounteractions = turnActionCounters(counterableAction.action_type);
 
-// TODO: Factor out waiting for a challenge against blocking foreign aid?
-type ServerAwaitingChallengeResultReveal = {
-    state: "awaiting_challenge_reveal",
-    challenge_action: ChallengeAction,
-    foreign_aid_passes: PlayerId[],
-};
+    let state: ServerGameState2 | undefined = {
+        clientHands: generateClientHands(playerInfluences, playerCredits),
+        clientStates: playerInfluences.map(_ => awaitingTargetCounteractionState),
+    };
+    getCounteraction: while (true) {
+        const input = yield state;
+        state = undefined;
 
-// TODO: Factor out waiting for a challenge against blocking foreign aid?
-type ServerAwaitingDiscardInfluence = {
-    state: "awaiting_discard_influence",
-    causing_action: CoupAction | AssassinateAction | RevealChallengeResultAction,
-    foreign_aid_passes: PlayerId[],
-};
+        switch (input.action_type) {
+            case "forfeit": {
+                if (playerEliminated(input.acting_player, playerInfluences)) {
+                    continue getCounteraction;
+                }
+
+                const [i0, i1] = playerInfluences[input.acting_player];
+                i0.discarded = true;
+                i1.discarded = true;
+
+                const winner = getWinner(playerInfluences);
+                if (winner !== null || input.acting_player === targetPlayer) {
+                    return false;
+                }
+
+                state = {
+                    clientHands: generateClientHands(playerInfluences, playerCredits),
+                    clientStates: playerInfluences.map(_ => awaitingTargetCounteractionState),
+                };
+                continue getCounteraction;
+            }
+            case "Pass": {
+                if (input.acting_player !== targetPlayer) {
+                    continue getCounteraction;
+                }
+                if (!isDeepStrictEqual(input.pass_on_action, counterableAction)) {
+                    continue getCounteraction;
+                }
+                return true;
+            }
+            default: {
+                if (input.acting_player !== targetPlayer) {
+                    continue getCounteraction;
+                }
+                if (!isCounterAction(input)) {
+                    continue getCounteraction;
+                }
+                if (!validCounteractions.includes(input.action_type)) {
+                    continue getCounteraction;
+                }
+                if (!isDeepStrictEqual(input.blocked_action, counterableAction)) {
+                    continue getCounteraction;
+                }
+                const counteraction: CounterAction = input;
+                const doCounteraction = yield* handleActionChallenges(counteraction, deck, playerInfluences, playerCredits);
+                const winner = getWinner(playerInfluences);
+                return winner === null && !doCounteraction;
+            }
+        }
+    }
+}
+
+function generateClientHands(playerInfluences: [HeldInfluence, HeldInfluence][], playerCredits: number[]): HandsState[] {
+    const hands: HandsState[] = [];
+    const influences_discarded = playerInfluences.map(([i0, i1]) => [(i0.discarded ? i0.influence : null), (i1.discarded ? i1.influence : null)] as [Influence | null, Influence | null]);
+    for (let pid = 0; pid < playerInfluences.length; pid++) {
+        const [i0, i1] = playerInfluences[pid];
+        hands.push({
+            influences_discarded,
+            player_credits: playerCredits,
+            this_player_id: pid,
+            this_player_influences: [i0.influence, i1.influence],
+        });
+    }
+    return hands;
+}
+
+function getWinner(playerInfluences: [HeldInfluence, HeldInfluence][]): PlayerId | null {
+    let winner: number | null = null;
+    for (let pid = 0; pid < playerInfluences.length; pid++) {
+        const [i0, i1] = playerInfluences[pid];
+        if (!i0.discarded || !i1.discarded) {
+            if (winner !== null) {
+                return null;
+            }
+            winner = pid;
+        }
+    }
+    return winner;
+}
+
+// Returns true for invalid player ids
+function playerEliminated(pid: PlayerId, playerInfluences: [HeldInfluence, HeldInfluence][]): boolean {
+    const hand = playerInfluences[pid];
+    return hand === undefined || (hand[0].discarded && hand[1].discarded);
+}
 
 type HeldInfluence = {
     influence: Influence,

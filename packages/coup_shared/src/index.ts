@@ -134,6 +134,10 @@ export type ChooseExchangedInfluencesAction = {
     action_type: "Choose Exchanged Influences",
     acting_player: PlayerId,
     exchange_action: ExchangeAction,
+    /**
+     * `swap_influences_with[i] = j` means swap `acting_player`'s
+     * `j`'th influence with `AwaitingInfluenceExchange.new_influences[i]`
+     */
     swap_influence_with: [0 | 1 | null, 0 | 1 | null],
 };
 
@@ -231,8 +235,8 @@ export function isTurnAction(action: ActionType): action is TurnActionType {
     return (TURN_ACTION_LIST as readonly ActionType[]).includes(action);
 }
 
-export function isCounterAction(action: ActionType): action is CounterActionType {
-    return (COUNTER_ACTION_LIST as readonly ActionType[]).includes(action);
+export function isCounterAction(action: Action): action is CounterAction {
+    return (COUNTER_ACTION_LIST as readonly ActionType[]).includes(action.action_type);
 }
 
 export function turnActionCounters(action: TurnActionType): CounterActionType[] {
