@@ -421,10 +421,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 break;
         }
     }
-
+    
     const actionButtons = actions.map(({ label, packet }) => {
         // TODO: Set keys?
-        return <button onClick={() => sendPacket(packet)} key={Math.random()}><p>{label}</p></button>;
+        return <button className="border bg-gray-200 p-2 mt-1 min-w-24 min-h-24" onClick={() => sendPacket(packet)} key={Math.random()}><p>{label}</p></button>;
     });
     const colors = ["blue","green","orange","black","red","pink","gray"];
     //List of other player's hands info
@@ -459,7 +459,9 @@ function Game({ usernames, handsState, gameState, sendPacket }:
             >
 
             </PlayerHandDisplay>
-            {actionButtons}
+            <div className="flex flex-col md:flex-row space-x-4 justify-center items-center">
+                {actionButtons}
+            </div>
         </>
     );
 }
