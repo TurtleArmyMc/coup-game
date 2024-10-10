@@ -9,9 +9,18 @@ export type CoupClientView = {
     },
 };
 
+export type ServerMemberId = number;
+
 export type ClientToServerPacket = {
-    action: Action
+    type: "game_action",
+    action: Action,
+} |
+{
+    type: "change_ready_state",
+    // TODO: Spectators
+    state: "ready" | "not_ready",
 };
+// TODO: Reorder players
 
 export type ServerToClientPacket = {
     game_state: ClientGameState,

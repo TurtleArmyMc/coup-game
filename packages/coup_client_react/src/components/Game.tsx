@@ -1,20 +1,20 @@
-import { AssassinateAction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, AwaitingForeignAidBlock, AwaitingInfluenceExchange, AwaitingTargetCounteraction, AwaitingTurn, ClientGameState, ClientToServerPacket, HandsState, Influence, PlayerId, StealAction, clientValidActionTypes } from "coup_shared";
+import { Action, AssassinateAction, AwaitingActionChallenge, AwaitingChallengeResultReveal, AwaitingDiscardInfluence, AwaitingForeignAidBlock, AwaitingInfluenceExchange, AwaitingTargetCounteraction, AwaitingTurn, ClientGameState, ClientToServerPacket, HandsState, Influence, PlayerId, StealAction, clientValidActionTypes } from "coup_shared";
 import OtherPlayerInfo from "./OtherPlayerInfo";
 import PlayerHandDisplay from "./PlayerHandDisplay";
 
-function Game({ usernames, handsState, gameState, sendPacket }:
+function Game({ usernames, handsState, gameState, makeAction }:
     {
         usernames: string[],
         handsState: HandsState,
         gameState: ClientGameState,
-        sendPacket: (packet: ClientToServerPacket) => void,
+        makeAction: (action: Action) => void,
     }) {
     const mypid = handsState.this_player_id;
     const playerInfluencesDiscarded = handsState.influences_discarded[mypid].map(i => i !== null) as [boolean, boolean];
 
     const actions: {
         label: string,
-        packet: ClientToServerPacket
+        action: Action,
     }[] = [];
     console.log("ACTION TYPES");
     console.log(clientValidActionTypes({ game_state: gameState, hands_state: handsState }));
@@ -23,48 +23,40 @@ function Game({ usernames, handsState, gameState, sendPacket }:
             case "Income":
                 actions.push({
                     label: "Income",
-                    packet: {
-                        action: {
-                            action_type: "Income",
-                            acting_player: mypid,
-                            on_turn: (gameState as AwaitingTurn),
-                        }
+                    action: {
+                        action_type: "Income",
+                        acting_player: mypid,
+                        on_turn: (gameState as AwaitingTurn),
                     }
                 });
                 break;
             case "Foreign Aid":
                 actions.push({
                     label: "Foreign Aid",
-                    packet: {
-                        action: {
-                            action_type: "Foreign Aid",
-                            acting_player: mypid,
-                            on_turn: (gameState as AwaitingTurn),
-                        }
+                    action: {
+                        action_type: "Foreign Aid",
+                        acting_player: mypid,
+                        on_turn: (gameState as AwaitingTurn),
                     }
                 });
                 break;
             case "Tax":
                 actions.push({
                     label: "Tax",
-                    packet: {
-                        action: {
-                            action_type: "Tax",
-                            acting_player: mypid,
-                            on_turn: (gameState as AwaitingTurn),
-                        }
+                    action: {
+                        action_type: "Tax",
+                        acting_player: mypid,
+                        on_turn: (gameState as AwaitingTurn),
                     }
                 });
                 break;
             case "Exchange":
                 actions.push({
                     label: "Exchange Influences",
-                    packet: {
-                        action: {
-                            action_type: "Exchange",
-                            acting_player: mypid,
-                            on_turn: (gameState as AwaitingTurn),
-                        }
+                    action: {
+                        action_type: "Exchange",
+                        acting_player: mypid,
+                        on_turn: (gameState as AwaitingTurn),
                     }
                 });
                 break;
@@ -72,12 +64,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = (gameState as AwaitingForeignAidBlock);
                 actions.push({
                     label: `Block ${usernames[gs.foreign_aid_action.acting_player]}'s foreign aid`,
-                    packet: {
-                        action: {
-                            action_type: "Block Foreign Aid",
-                            acting_player: mypid,
-                            blocked_action: gs.foreign_aid_action
-                        }
+                    action: {
+                        action_type: "Block Foreign Aid",
+                        acting_player: mypid,
+                        blocked_action: gs.foreign_aid_action
                     }
                 });
                 break;
@@ -86,12 +76,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = (gameState as AwaitingTargetCounteraction);
                 actions.push({
                     label: `Block ${usernames[gs.targeted_action.acting_player]}'s stealing with Captain`,
-                    packet: {
-                        action: {
-                            action_type: "Block Stealing with Captain",
-                            acting_player: mypid,
-                            blocked_action: gs.targeted_action as StealAction
-                        }
+                    action: {
+                        action_type: "Block Stealing with Captain",
+                        acting_player: mypid,
+                        blocked_action: gs.targeted_action as StealAction
                     }
                 });
                 break;
@@ -100,12 +88,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = (gameState as AwaitingTargetCounteraction);
                 actions.push({
                     label: `Block ${usernames[gs.targeted_action.acting_player]}'s stealing with Ambassador`,
-                    packet: {
-                        action: {
-                            action_type: "Block Stealing with Ambassador",
-                            acting_player: mypid,
-                            blocked_action: gs.targeted_action as StealAction
-                        }
+                    action: {
+                        action_type: "Block Stealing with Ambassador",
+                        acting_player: mypid,
+                        blocked_action: gs.targeted_action as StealAction
                     }
                 });
                 break;
@@ -114,12 +100,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = gameState as AwaitingTargetCounteraction;
                 actions.push({
                     label: `Block ${usernames[gs.targeted_action.acting_player]}'s Assassination`,
-                    packet: {
-                        action: {
-                            action_type: "Block Assassination",
-                            acting_player: mypid,
-                            blocked_action: gs.targeted_action as AssassinateAction
-                        }
+                    action: {
+                        action_type: "Block Assassination",
+                        acting_player: mypid,
+                        blocked_action: gs.targeted_action as AssassinateAction
                     }
                 });
                 break;
@@ -130,13 +114,11 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         actions.push(
                             {
                                 label: `Discard ${handsState.this_player_influences[i]}`,
-                                packet: {
-                                    action: {
-                                        action_type: "Discard Influence",
-                                        acting_player: mypid,
-                                        causing_action: (gameState as AwaitingDiscardInfluence).causing_action,
-                                        influence_index: i,
-                                    }
+                                action: {
+                                    action_type: "Discard Influence",
+                                    acting_player: mypid,
+                                    causing_action: (gameState as AwaitingDiscardInfluence).causing_action,
+                                    influence_index: i,
                                 }
                             }
                         );
@@ -149,13 +131,11 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                         actions.push(
                             {
                                 label: `Reveal ${handsState.this_player_influences[i]}`,
-                                packet: {
-                                    action: {
-                                        action_type: "Reveal Challenge Result",
-                                        acting_player: mypid,
-                                        revealed_influence_index: i,
-                                        challenge_action: (gameState as AwaitingChallengeResultReveal).challenge_action,
-                                    }
+                                action: {
+                                    action_type: "Reveal Challenge Result",
+                                    acting_player: mypid,
+                                    revealed_influence_index: i,
+                                    challenge_action: (gameState as AwaitingChallengeResultReveal).challenge_action,
                                 }
                             }
                         );
@@ -172,13 +152,11 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     }
                     actions.push({
                         label: `Coup ${usernames[target]}`,
-                        packet: {
-                            action: {
-                                action_type: "Coup",
-                                acting_player: mypid,
-                                target_player: target,
-                                on_turn: (gameState as AwaitingTurn),
-                            }
+                        action: {
+                            action_type: "Coup",
+                            acting_player: mypid,
+                            target_player: target,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     });
                 }
@@ -193,13 +171,11 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     }
                     actions.push({
                         label: `Assassinate ${usernames[target]}`,
-                        packet: {
-                            action: {
-                                action_type: "Assassinate",
-                                acting_player: mypid,
-                                target_player: target,
-                                on_turn: (gameState as AwaitingTurn),
-                            }
+                        action: {
+                            action_type: "Assassinate",
+                            acting_player: mypid,
+                            target_player: target,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     });
                 }
@@ -217,13 +193,11 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     }
                     actions.push({
                         label: `Steal from ${usernames[target]}`,
-                        packet: {
-                            action: {
-                                action_type: "Steal",
-                                acting_player: mypid,
-                                target_player: target,
-                                on_turn: (gameState as AwaitingTurn),
-                            }
+                        action: {
+                            action_type: "Steal",
+                            acting_player: mypid,
+                            target_player: target,
+                            on_turn: (gameState as AwaitingTurn),
                         }
                     });
                 }
@@ -237,108 +211,90 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     const oldInf = handsState.this_player_influences[oldInfInx];
                     actions.push({
                         label: `Keep ${oldInf}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [null, null],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [null, null],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     actions.push({
                         label: `Keep ${newL}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [oldInfInx, null],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [oldInfInx, null],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     actions.push({
                         label: `Keep ${newR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [null, oldInfInx],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [null, oldInfInx],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                 } else {
                     // XX
                     actions.push({
                         label: `Keep ${oldL} and ${oldR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [null, null],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [null, null],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     // XL
                     actions.push({
                         label: `Keep ${oldL} and ${newL}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [1, null],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [1, null],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     // XR
                     actions.push({
                         label: `Keep ${oldL} and ${newR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [null, 1],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [null, 1],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     // LX
                     actions.push({
                         label: `Keep ${newL} and ${oldR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [0, null],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [0, null],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     // RX
                     actions.push({
                         label: `Keep ${newR} and ${oldR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [null, 0],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [null, 0],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                     // LR
                     actions.push({
                         label: `Keep ${newL} and ${newR}`,
-                        packet: {
-                            action: {
-                                action_type: "Choose Exchanged Influences",
-                                acting_player: mypid,
-                                swap_influence_with: [0, 1],
-                                exchange_action: gs.exchange_action,
-                            }
+                        action: {
+                            action_type: "Choose Exchanged Influences",
+                            acting_player: mypid,
+                            swap_influence_with: [0, 1],
+                            exchange_action: gs.exchange_action,
                         }
                     });
                 }
@@ -392,12 +348,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 }
                 actions.push({
                     label,
-                    packet: {
-                        action: {
-                            action_type: "Challenge",
-                            acting_player: mypid,
-                            challenged_action: gs.challengable_action,
-                        }
+                    action: {
+                        action_type: "Challenge",
+                        acting_player: mypid,
+                        challenged_action: gs.challengable_action,
                     }
                 });
                 break;
@@ -406,12 +360,10 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 const gs = gameState as (AwaitingActionChallenge | AwaitingTargetCounteraction | AwaitingForeignAidBlock);
                 actions.push({
                     label: "Pass",
-                    packet: {
-                        action: {
-                            action_type: "Pass",
-                            acting_player: mypid,
-                            pass_on_action: gs.state === "awaiting_challenge" ? gs.challengable_action : (gs.state === "awaiting_foreign_aid_block" ? gs.foreign_aid_action : gs.targeted_action),
-                        }
+                    action: {
+                        action_type: "Pass",
+                        acting_player: mypid,
+                        pass_on_action: gs.state === "awaiting_challenge" ? gs.challengable_action : (gs.state === "awaiting_foreign_aid_block" ? gs.foreign_aid_action : gs.targeted_action),
                     }
                 });
                 break;
@@ -421,12 +373,12 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 break;
         }
     }
-    
-    const actionButtons = actions.map(({ label, packet }) => {
+
+    const actionButtons = actions.map(({ label, action }) => {
         // TODO: Set keys?
-        return <button className="border bg-gray-200 p-2 mt-1 min-w-24 min-h-24" onClick={() => sendPacket(packet)} key={Math.random()}><p>{label}</p></button>;
+        return <button className="border bg-gray-200 p-2 mt-1 min-w-24 min-h-24" onClick={() => makeAction(action)} key={Math.random()}><p>{label}</p></button>;
     });
-    const colors = ["blue","green","orange","black","red","pink","gray"];
+    const colors = ["blue", "green", "orange", "black", "red", "pink", "gray"];
     //List of other player's hands info
     const playersInfo = handsState.influences_discarded
         .map<[[Influence | null, Influence | null], PlayerId]>((influences, id) => [influences, id])
@@ -437,7 +389,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                     name={usernames[id]}
                     credits={handsState.player_credits[id]}
                     revealedInfluences={revealed_influences}
-                    color = {colors[id]}
+                    color={colors[id]}
                     key={id}
                 ></OtherPlayerInfo>
             );
@@ -455,7 +407,7 @@ function Game({ usernames, handsState, gameState, sendPacket }:
                 influenceDiscarded={playerInfluencesDiscarded}
                 influences={handsState.this_player_influences}
                 name={usernames[mypid]}
-                color = {colors[mypid]}
+                color={colors[mypid]}
             >
 
             </PlayerHandDisplay>

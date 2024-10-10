@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import Game from './components/Game';
-import { ClientGameState, HandsState, ServerToClientPacket } from 'coup_shared';
+import { ClientGameState, ClientToServerPacket, HandsState, ServerToClientPacket } from 'coup_shared';
 // import { ClientToServerPacket } from 'coup_shared'
 
 function App() {
@@ -70,9 +70,13 @@ function App() {
           gameState={gameState}
           handsState={handsState}
           usernames={usernames}
-          sendPacket={(packet) => {
+          makeAction={(action) => {
+            const packet: ClientToServerPacket = {
+              type: "game_action",
+              action,
+            };
             console.log("ACTING");
-            console.log(packet);
+            console.log(action);
             ws.current?.send(JSON.stringify(packet));
           }}
         >

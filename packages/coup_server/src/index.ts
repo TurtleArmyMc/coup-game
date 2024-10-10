@@ -1,4 +1,4 @@
-import { ClientToServerPacket, PlayerId, ServerToClientPacket, clientValidActionTypes } from "coup_shared";
+import { ClientToServerPacket, PlayerId, ServerMemberId, ServerToClientPacket } from "coup_shared";
 import { CoupGame } from "coup_game";
 import express from 'express';
 import expressWs from 'express-ws';
@@ -6,11 +6,9 @@ import type { WebSocket } from "ws";
 import cors from 'cors';
 import assert from "assert";
 
-type UserId = number;
-
 type User = {
     name: string,
-    id: UserId,
+    id: ServerMemberId,
     ws: WebSocket | null
 };
 
@@ -19,7 +17,7 @@ class Lobby {
     users: User[];
     gameInfo: null | {
         game: CoupGame,
-        userIdToGameId: Map<UserId, PlayerId>,
+        userIdToGameId: Map<ServerMemberId, PlayerId>,
     };
 
     constructor(name: string) {
@@ -28,7 +26,7 @@ class Lobby {
         this.gameInfo = null;
     }
 
-    addUser(name: string, ws: WebSocket): UserId {
+    addUser(name: string, ws: WebSocket): ServerMemberId {
         console.log(`Added ${name}`);
         const id = this.users.length;
         const user: User = { name, id, ws };
@@ -70,6 +68,7 @@ class Lobby {
                 () => this.receivePacket(
                     user.id,
                     {
+                        type: "game_action",
                         action: {
                             action_type: "forfeit",
                             acting_player: pid,
@@ -109,6 +108,7 @@ class Lobby {
                 () => this.receivePacket(
                     user.id,
                     {
+                        type: "game_action",
                         action: {
                             action_type: "forfeit",
                             acting_player: pid,
@@ -119,9 +119,12 @@ class Lobby {
         }
     }
 
-    private receivePacket(sender: UserId, packet: ClientToServerPacket) {
+    private receivePacket(sender: ServerMemberId, packet: ClientToServerPacket) {
         console.log("Received");
         console.log(packet);
+        if (packet.type === "change_ready_state") {
+            throw "todo";
+        }
         if (this.gameInfo) {
             const { game, userIdToGameId } = this.gameInfo;
             const playerId: PlayerId = userIdToGameId.get(sender)!;
@@ -160,7 +163,7 @@ class Lobby {
         }
     }
 
-    private broadcastState(broadcastTo: UserId) {
+    private broadcastState(broadcastTo: ServerMemberId) {
         const ws = this.users.find(u => u.id === broadcastTo)?.ws;
         const game = this.gameInfo?.game;
         if (ws && game) {
