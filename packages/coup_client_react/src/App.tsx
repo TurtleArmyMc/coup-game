@@ -1,65 +1,101 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import './App.css'
 import Game from './components/Game';
 import { ClientGameState, ClientToServerPacket, HandsState, ServerToClientPacket } from 'coup_shared';
-// import { ClientToServerPacket } from 'coup_shared'
 
 function App() {
-  const [playerName, setPlayerName] = useState<string | null>(null);
-  const [submittedUsername, setSubmittedUsername] = useState<boolean>(false);
   const ws = useRef<WebSocket | null>(null);
-  // const [usernames, setUsernames] = useState<string[]>([]);
-  const [usernames, setUsernames] = useState<string[]>(["A", "B", "C"]);
-  const [gameState, setGameState] = useState<ClientGameState | null>(null);
-  // const [gameState, setGameState] = useState<ClientGameState | null>({
-  //   state: "player_turn",
-  //   player: 0,
-  // });
-  const [handsState, setHandsState] = useState<HandsState | null>(null);
-  // const [handsState, setHandsState] = useState<HandsState | null>({
-  //   influences_discarded: [[null, null], [null, null], [null, null]],
-  //   player_credits: [1, 3, 2],
-  //   this_player_id: 0,
-  //   this_player_influences: ["Captain", "Ambassador"]
-  // });
+  type LobbyStateType = {
+    state: "not_connected",
+  } | {
+    state: "waiting",
+    usernames: string[],
+    playerName: string,
+    ready: boolean,
+  } | {
+    state: "playing",
+    playerName: string,
+    usernames: string[],
+    gameState: ClientGameState,
+    handsState: HandsState,
+  };
+  const [lobbyState, setLobbyState] = useState<LobbyStateType>({ state: "not_connected" });
 
-  useEffect(
-    () => {
-      console.log("A");
-      if (playerName === null) {
-        return;
-      }
-      console.log("B");
-      let path = window.location.href;
-      if (path.charAt(path.length - 1) != '/') path = path + '/';
-      path = path + `ws/lobby/${playerName!}`;
-      const url = new URL(path);
-      url.port = "3000";
-      url.protocol = url.protocol.replace('http', 'ws');
-      const socket = new WebSocket(url.href);
-      console.log("C");
-      socket.onopen = (ev) => console.log(ev);
+  function joinLobby(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (lobbyState.state !== "not_connected") {
+      return;
+    }
+
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    const playerName = formData.get("player_name") as string;
+
+    // Update UI to be hide username input before getting a response from the server
+    setLobbyState({
+      state: "waiting",
+      playerName,
+      usernames: [],
+      ready: false,
+    });
+
+    let path = window.location.href;
+    if (path.charAt(path.length - 1) != '/') path = path + '/';
+    path = path + `ws/lobby/${playerName!}`;
+    const url = new URL(path);
+    url.port = "3000";
+    url.protocol = url.protocol.replace('http', 'ws');
+    const socket = new WebSocket(url.href);
+    socket.onmessage = (msg) => {
+      // Receive usernames
+      const usernames = JSON.parse(msg.data);
+      console.log("GOT USERNAMES");
+      console.log(usernames);
+      setLobbyState({
+        state: "waiting",
+        playerName,
+        usernames,
+        ready: false,
+      });
+      // Setup socket to listen for game updates
       socket.onmessage = (msg) => {
-        console.log("GOT USERNAMES");
-        // Receive usernames
-        const names = JSON.parse(msg.data);
-        // Setup socket to listen for game updates
-        socket.onmessage = (msg) => {
-          const packet: ServerToClientPacket = JSON.parse(msg.data);
-          console.log("RECEIVING");
-          console.log(packet);
-          setGameState(packet.game_state);
-          setHandsState(packet.hands_state);
-        }
-        setUsernames(names);
-      };
-      ws.current = socket;
-      return socket.close;
-    },
-    [submittedUsername],
-  );
+        const packet: ServerToClientPacket = JSON.parse(msg.data);
+        console.log("RECEIVING");
+        console.log(packet);
+        setLobbyState(
+          {
+            state: "playing",
+            playerName,
+            usernames,
+            gameState: packet.game_state,
+            handsState: packet.hands_state,
+          }
+        );
+      }
+    };
+    ws.current = socket;
+    return socket.close;
+  }
 
-  if (gameState && handsState) {
+  function readyUp() {
+    if (lobbyState.state !== "waiting" || lobbyState.ready) {
+      return;
+    }
+    const packet: ClientToServerPacket = {
+      type: "change_ready_state",
+      state: 'ready',
+    };
+    setLobbyState(
+      {
+        ...lobbyState,
+        ready: true,
+      }
+    );
+    ws.current?.send(JSON.stringify(packet));
+  }
+
+  if (lobbyState.state === "playing") {
     return (
       <><div className='flex flex-col items-center m-10'>
         <h1 className="font-bold"
@@ -67,9 +103,9 @@ function App() {
       </div>
         {/* <p>{resp}</p> */}
         <Game
-          gameState={gameState}
-          handsState={handsState}
-          usernames={usernames}
+          gameState={lobbyState.gameState}
+          handsState={lobbyState.handsState}
+          usernames={lobbyState.usernames}
           makeAction={(action) => {
             const packet: ClientToServerPacket = {
               type: "game_action",
@@ -83,21 +119,29 @@ function App() {
         </Game>
       </>
     );
-  } else if (submittedUsername) {
-    return (
-      <><div className='flex flex-col items-center m-10'>
-        <h1 className='font-bold'>COUP</h1>
-        <p>Waiting for lobby to start...</p>
-      </div>
-      </>
-    );
+  } else if (lobbyState.state === "waiting") {
+    if (lobbyState.ready) {
+      return (
+        <>
+          <div className='flex flex-col items-center m-10'>
+            <h1 className='font-bold'>COUP</h1>
+            <p>Waiting for lobby to start...</p>
+          </div>
+        </>
+      );
+    } else {
+      return (
+        <button className='flex flex-col items-center m-10' onClick={readyUp}>
+          Ready up
+        </button>
+      );
+    }
   } else {
     return (
       <><div className='flex flex-col items-center m-10'>
         <h1 className='font-bold'>COUP</h1>
-        <form className="border-zinc-950" onSubmit={() => setSubmittedUsername(true)}>
-          <input className='border'
-            onChange={(e) => setPlayerName(e.target.value)}></input>
+        <form className="border-zinc-950" onSubmit={joinLobby}>
+          <input className='border' name="player_name"></input>
         </form>
       </div>
       </>
