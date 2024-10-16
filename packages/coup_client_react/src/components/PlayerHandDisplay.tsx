@@ -10,13 +10,13 @@ function PlayerHandDisplay({ name, credits, color, influences, influenceDiscarde
     const eliminated = influenceDiscarded[0] && influenceDiscarded[1];
 
     return (
-        <div style={{border: "solid " + color}}>
-            <h1 style ={{fontFamily: "cursive ",}}
+        <div className = "border-orange-500 border-2 flex flex-col items-center">
+            <h1 className="text-lg font-bold"
             >
                 {name}
             </h1>
             <p>{credits} credits</p>
-            <div style={{ display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+            <div className="flex space-x-5">
                 <p style={{ textDecoration: influenceDiscarded[0] ? "line-through" : "" }}>{influences[0]}</p>
                 <p style={{ textDecoration: influenceDiscarded[1] ? "line-through" : "" }}>{influences[1]}</p>
             </div>

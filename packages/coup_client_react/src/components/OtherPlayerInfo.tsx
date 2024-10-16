@@ -9,8 +9,8 @@ function OtherPlayerInfo({ name, credits, color, revealedInfluences: revealedInf
     const influenceCount = revealedInfluence.filter(i => i === null).length;
 
     return (
-        <div style={{ border: "solid " + color }}>
-            <h1 style={{ fontFamily: "cursive ", width: "165px" }}
+        <div className ="md:p-10 flex flex-col mb-5 items-center" style={{ border: "solid " + color }}>
+            <h1 className ="text-lg font-bold" style={{ fontFamily: "cursive "}}
             >
                 {name}
             </h1>

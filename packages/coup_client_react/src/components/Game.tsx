@@ -376,7 +376,7 @@ function Game({ usernames, handsState, gameState, makeAction }:
 
     const actionButtons = actions.map(({ label, action }) => {
         // TODO: Set keys?
-        return <button className="border bg-gray-200 p-2 mt-1 min-w-24 min-h-24" onClick={() => makeAction(action)} key={Math.random()}><p>{label}</p></button>;
+        return <button className="border-2 border-black bg-gray-200 p-2 m-1 md:mt-10 md:min-w-40 md:min-h-24" onClick={() => makeAction(action)} key={Math.random()}><p>{label}</p></button>;
     });
     const colors = ["blue", "green", "orange", "black", "red", "pink", "gray"];
     //List of other player's hands info
@@ -397,22 +397,25 @@ function Game({ usernames, handsState, gameState, makeAction }:
 
     return (
         <>
-            <div style={{ display: "flex", gap: "20%", flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
-                {playersInfo}
-            </div >
+            <div className="md:p-32 flex-col">
+                <div className="flex justify-evenly">
+                    {playersInfo}
+                </div >
 
-            {/* My hand */}
-            <PlayerHandDisplay
-                credits={handsState.player_credits[mypid]}
-                influenceDiscarded={playerInfluencesDiscarded}
-                influences={handsState.this_player_influences}
-                name={usernames[mypid]}
-                color={colors[mypid]}
-            >
-
-            </PlayerHandDisplay>
-            <div className="flex flex-col md:flex-row space-x-4 justify-center items-center">
-                {actionButtons}
+                {/* My hand */}
+                <div className="justify-center m-1">
+                    <PlayerHandDisplay
+                        credits={handsState.player_credits[mypid]}
+                        influenceDiscarded={playerInfluencesDiscarded}
+                        influences={handsState.this_player_influences}
+                        name={usernames[mypid]}
+                        color={colors[mypid]}
+                    >
+                    </PlayerHandDisplay>
+                </div>
+                <div className="grid grid-cols-2 md:flex md:flex-row justify-center items-center">
+                    {actionButtons}
+                </div>
             </div>
         </>
     );
